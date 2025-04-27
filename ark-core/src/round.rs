@@ -11,6 +11,7 @@ use crate::Vtxo;
 use crate::VTXO_INPUT_INDEX;
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::Hash;
+use bitcoin::hex::DisplayHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1;
@@ -229,6 +230,8 @@ where
                             extra_rand,
                         )
                         .map_err(Error::crypto)?;
+
+                    dbg!(pub_nonce.serialize().to_lower_hex_string());
 
                     Ok(Some((Some(nonce), pub_nonce)))
                 })
