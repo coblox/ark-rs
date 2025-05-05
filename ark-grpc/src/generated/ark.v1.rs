@@ -119,29 +119,17 @@ pub struct RedeemTransaction {
     #[prost(string, tag = "4")]
     pub hex: ::prost::alloc::string::String,
 }
-/// This message is used to prove to the server that the user controls the vtxo without revealing
-/// the whole VTXO taproot tree.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct OwnershipProof {
-    #[prost(string, tag = "1")]
-    pub control_block: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub script: ::prost::alloc::string::String,
-    /// VTXO outpoint signed with script's secret key
-    #[prost(string, tag = "3")]
-    pub signature: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SignedVtxoOutpoint {
-    #[prost(message, optional, tag = "1")]
-    pub outpoint: ::core::option::Option<Outpoint>,
-    #[prost(message, optional, tag = "2")]
-    pub proof: ::core::option::Option<OwnershipProof>,
-}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Tapscripts {
     #[prost(string, repeated, tag = "1")]
     pub scripts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Bip322Signature {
+    #[prost(string, tag = "1")]
+    pub signature: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct MarketHour {
@@ -658,6 +646,20 @@ pub struct GetInfoResponse {
     pub market_hour: ::core::option::Option<MarketHour>,
     #[prost(string, tag = "11")]
     pub version: ::prost::alloc::string::String,
+    /// -1 means native dust limit (default)
+    #[prost(int64, tag = "12")]
+    pub utxo_min_amount: i64,
+    /// -1 means no limit (default), 0 means boarding not allowed
+    #[prost(int64, tag = "13")]
+    pub utxo_max_amount: i64,
+    /// -1 means native dust limit (default)
+    #[prost(int64, tag = "14")]
+    pub vtxo_min_amount: i64,
+    /// -1 means no limit (default)
+    #[prost(int64, tag = "15")]
+    pub vtxo_max_amount: i64,
+    #[prost(int64, tag = "16")]
+    pub boarding_exit_delay: i64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetBoardingAddressRequest {
@@ -680,6 +682,19 @@ pub mod get_boarding_address_response {
         #[prost(message, tag = "3")]
         Tapscripts(super::Tapscripts),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegisterIntentRequest {
+    /// BIP322 signature embeds the outpoints and the proof of funds
+    #[prost(message, optional, tag = "1")]
+    pub bip322_signature: ::core::option::Option<Bip322Signature>,
+    #[prost(string, repeated, tag = "2")]
+    pub notes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegisterIntentResponse {
+    #[prost(string, tag = "1")]
+    pub request_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterInputsForNextRoundRequest {
@@ -805,22 +820,6 @@ pub mod get_transactions_stream_response {
         Redeem(super::RedeemTransaction),
     }
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SetNostrRecipientRequest {
-    #[prost(string, tag = "1")]
-    pub nostr_recipient: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "2")]
-    pub vtxos: ::prost::alloc::vec::Vec<SignedVtxoOutpoint>,
-}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct SetNostrRecipientResponse {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DeleteNostrRecipientRequest {
-    #[prost(message, repeated, tag = "1")]
-    pub vtxos: ::prost::alloc::vec::Vec<SignedVtxoOutpoint>,
-}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct DeleteNostrRecipientResponse {}
 /// Generated client implementations.
 pub mod ark_service_client {
     #![allow(
@@ -939,6 +938,21 @@ pub mod ark_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "GetBoardingAddress"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn register_intent(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RegisterIntentRequest>,
+        ) -> std::result::Result<tonic::Response<super::RegisterIntentResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/RegisterIntent");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.ArkService", "RegisterIntent"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn register_inputs_for_next_round(
@@ -1099,37 +1113,6 @@ pub mod ark_service_client {
                 "GetTransactionsStream",
             ));
             self.inner.server_streaming(req, path, codec).await
-        }
-        pub async fn set_nostr_recipient(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SetNostrRecipientRequest>,
-        ) -> std::result::Result<tonic::Response<super::SetNostrRecipientResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/SetNostrRecipient");
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.ArkService", "SetNostrRecipient"));
-            self.inner.unary(req, path, codec).await
-        }
-        pub async fn delete_nostr_recipient(
-            &mut self,
-            request: impl tonic::IntoRequest<super::DeleteNostrRecipientRequest>,
-        ) -> std::result::Result<tonic::Response<super::DeleteNostrRecipientResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/ark.v1.ArkService/DeleteNostrRecipient");
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.ArkService", "DeleteNostrRecipient"));
-            self.inner.unary(req, path, codec).await
         }
     }
 }

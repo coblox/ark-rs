@@ -373,7 +373,7 @@ async fn fund_vtxo(
         &secp,
         server_info.pk.x_only_public_key().0,
         pk,
-        server_info.unilateral_exit_delay,
+        server_info.boarding_exit_delay,
         server_info.network,
     )?;
 

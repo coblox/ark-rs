@@ -40,23 +40,6 @@ impl BoardingOutput {
     where
         C: Verification,
     {
-        // HACK: I believe the Ark server should give us a value for the boarding exit delay, now
-        // that it can diverge from the `unilateral_exit_delay` applied to VTXOs.
-        //
-        // We double the `unilateral_exit_delay` because this works against our regtest Ark server.
-        let exit_delay = exit_delay
-            .to_relative_lock_time()
-            .ok_or_else(|| Error::ad_hoc("invalid exit delay"))?;
-
-        let exit_delay = match exit_delay {
-            relative::LockTime::Blocks(blocks) => {
-                bitcoin::Sequence::from_height(blocks.value() * 2)
-            }
-            relative::LockTime::Time(time) => {
-                bitcoin::Sequence::from_512_second_intervals(time.value() * 2)
-            }
-        };
-
         let unspendable_key: PublicKey = UNSPENDABLE_KEY.parse().expect("valid key");
         let (unspendable_key, _) = unspendable_key.inner.x_only_public_key();
 
