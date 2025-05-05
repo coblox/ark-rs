@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
         &secp,
         server_info.pk.x_only_public_key().0,
         pk.x_only_public_key().0,
-        server_info.unilateral_exit_delay,
+        server_info.boarding_exit_delay,
         server_info.network,
     )?;
 

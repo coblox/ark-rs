@@ -63,9 +63,18 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     assert_eq!(offchain_balance.confirmed(), Amount::ZERO);
     assert_eq!(offchain_balance.pending(), Amount::ZERO);
 
-    // To be able to spend a VTXO or a boarding output it needs to have been confirmed for at least
-    // 2048 seconds.
-    nigiri.set_outpoint_blocktime_offset(2048);
+    // To be able to spend a VTXO it needs to have been confirmed for at least
+    // `unilateral_exit_delay` seconds.
+    //
+    // And to be able to spend a boarding output it needs to have been confirmed for at least
+    // `boarding_exit_delay` seconds.
+    //
+    // We take the larger value of the two here.
+    let boarding_exit_delay = alice.boarding_exit_delay_seconds();
+    let unilateral_vtxo_exit_delay = alice.unilateral_vtxo_exit_delay_seconds();
+    let blocktime_offset = boarding_exit_delay.max(unilateral_vtxo_exit_delay);
+
+    nigiri.set_outpoint_blocktime_offset(blocktime_offset);
 
     let (tx, prevouts) = alice
         .create_send_on_chain_transaction(
