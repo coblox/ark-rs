@@ -9,8 +9,18 @@
  */
 
 use crate::models;
+use bitcoin::address::NetworkUnchecked;
+use bitcoin::secp256k1;
+use bitcoin::Address;
+use bitcoin::Amount;
+use bitcoin::Denomination;
+use bitcoin::Network;
+use bitcoin::PublicKey;
 use serde::Deserialize;
 use serde::Serialize;
+use std::error::Error as StdError;
+use std::fmt;
+use std::str::FromStr;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct V1GetInfoResponse {
@@ -59,5 +69,113 @@ impl V1GetInfoResponse {
             forfeit_address: None,
             market_hour: None,
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum ConversionError {
+    MissingPubkey,
+    MissingRoundLifetime,
+    MissingUnilateralExitDelay,
+    MissingRoundInterval,
+    MissingNetwork,
+    MissingDust,
+    MissingBoardingDescriptorTemplate,
+    MissingVtxoDescriptorTemplate,
+    MissingForfeitAddress,
+    InvalidNetwork,
+    ParseError(&'static str),
+}
+
+impl fmt::Display for ConversionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConversionError::MissingPubkey => write!(f, "Missing pubkey field"),
+            ConversionError::MissingRoundLifetime => write!(f, "Missing round lifetime field"),
+            ConversionError::MissingUnilateralExitDelay => {
+                write!(f, "Missing unilateral exit delay field")
+            }
+            ConversionError::MissingRoundInterval => write!(f, "Missing round interval field"),
+            ConversionError::MissingNetwork => write!(f, "Missing network field"),
+            ConversionError::MissingDust => write!(f, "Missing dust field"),
+            ConversionError::MissingBoardingDescriptorTemplate => {
+                write!(f, "Missing boarding descriptor template field")
+            }
+            ConversionError::InvalidNetwork => write!(f, "Invalid network value"),
+            ConversionError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+            ConversionError::MissingVtxoDescriptorTemplate => {
+                write!(f, "Missing vtxo descriptor template",)
+            }
+            ConversionError::MissingForfeitAddress => write!(f, "Missing forfeit address"),
+        }
+    }
+}
+
+impl StdError for ConversionError {}
+
+impl TryFrom<V1GetInfoResponse> for ark_core::server::Info {
+    type Error = ConversionError;
+
+    fn try_from(value: V1GetInfoResponse) -> Result<Self, Self::Error> {
+        let pubkey = value.pubkey.ok_or(ConversionError::MissingPubkey)?;
+        let pubkey = secp256k1::PublicKey::from_str(pubkey.as_str())
+            .map_err(|_| ConversionError::ParseError("Failed parsing pubkey"))?;
+
+        let round_interval = value
+            .round_interval
+            .ok_or(ConversionError::MissingRoundInterval)?
+            .parse::<i64>()
+            .map_err(|_| ConversionError::ParseError("Failed to parse round_interval"))?;
+
+        let network = value.network.ok_or(ConversionError::MissingNetwork)?;
+        let network =
+            Network::from_str(network.as_str()).map_err(|_| ConversionError::InvalidNetwork)?;
+
+        let dust = value.dust.ok_or(ConversionError::MissingDust)?;
+        let dust = Amount::from_str_in(dust.as_str(), Denomination::Satoshi)
+            .map_err(|_| ConversionError::ParseError("Failed to parse dust"))?;
+
+        let unilateral_exit_delay = value
+            .unilateral_exit_delay
+            .ok_or(ConversionError::MissingUnilateralExitDelay)?
+            .parse()
+            .map_err(|_| ConversionError::ParseError("Failed to parse unilateral_exit_delay"))?;
+
+        let vtxo_tree_expiry = value
+            .round_lifetime
+            // TODO: our ark server doesn't return this value. I'm not sure it is mandatory?
+            .unwrap_or("30".to_string());
+
+        let vtxo_tree_expiry_seconds = u32::from_str(vtxo_tree_expiry.as_str()).map_err(|_| {
+            ConversionError::ParseError("Failed to parse round_lifetime to seconds")
+        })?;
+        let vtxo_tree_expiry = bitcoin::Sequence::from_seconds_ceil(vtxo_tree_expiry_seconds)
+            .map_err(|_| ConversionError::ParseError("Failed to parse round_lifetime"))?;
+
+        let forfeit_address = value
+            .forfeit_address
+            .ok_or(ConversionError::MissingForfeitAddress)?;
+        let forfeit_address: Address<NetworkUnchecked> = forfeit_address
+            .parse()
+            .map_err(|_| ConversionError::ParseError("Failed parsing forfeit address"))?;
+
+        let vtxo_descriptor_templates = value
+            .vtxo_descriptor_templates
+            .ok_or(ConversionError::MissingVtxoDescriptorTemplate)?;
+        let boarding_descriptor_template = value
+            .boarding_descriptor_template
+            .ok_or(ConversionError::MissingBoardingDescriptorTemplate)?;
+
+        Ok(ark_core::server::Info {
+            pk: pubkey,
+            vtxo_tree_expiry,
+            unilateral_exit_delay,
+            round_interval,
+            network,
+            dust,
+            boarding_descriptor_template,
+            vtxo_descriptor_templates,
+            forfeit_address: forfeit_address.assume_checked(),
+        })
     }
 }
