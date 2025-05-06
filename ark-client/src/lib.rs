@@ -289,6 +289,7 @@ where
         }
     }
 
+    // TODO: Add a timeout here. Maybe more generally.
     pub async fn connect(mut self) -> Result<Client<B, W>, Error> {
         self.network_client.connect().await?;
         let server_info = self.network_client.get_info().await?;
@@ -344,7 +345,7 @@ where
 
         let boarding_output = self.inner.wallet.new_boarding_output(
             server_info.pk.x_only_public_key().0,
-            server_info.unilateral_exit_delay,
+            server_info.boarding_exit_delay,
             server_info.network,
         )?;
 
@@ -500,6 +501,48 @@ where
         txs.sort_by_key(|a| a.created_at());
 
         Ok(txs)
+    }
+
+    /// Get the boarding exit delay defined by the Ark server, in seconds.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if the boarding exit delay corresponds to a relative locktime specified in
+    /// blocks. We expect the Ark server to use a relative locktime in seconds.
+    ///
+    /// This will also panic if the sequence number returned by the server is not a valid relative
+    /// locktime.
+    pub fn boarding_exit_delay_seconds(&self) -> u64 {
+        match self
+            .server_info
+            .boarding_exit_delay
+            .to_relative_lock_time()
+            .expect("relative locktime")
+        {
+            bitcoin::relative::LockTime::Time(time) => time.value() as u64 * 512,
+            bitcoin::relative::LockTime::Blocks(_) => unreachable!(),
+        }
+    }
+
+    /// Get the unilateral exit delay for VTXOs defined by the Ark server, in seconds.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if the unilateral exit delay corresponds to a relative locktime specified in
+    /// blocks. We expect the Ark server to use a relative locktime in seconds.
+    ///
+    /// This will also panic if the sequence number returned by the server is not a valid relative
+    /// locktime.
+    pub fn unilateral_vtxo_exit_delay_seconds(&self) -> u64 {
+        match self
+            .server_info
+            .unilateral_exit_delay
+            .to_relative_lock_time()
+            .expect("relative locktime")
+        {
+            bitcoin::relative::LockTime::Time(time) => time.value() as u64 * 512,
+            bitcoin::relative::LockTime::Blocks(_) => unreachable!(),
+        }
     }
 
     fn network_client(&self) -> ark_grpc::Client {

@@ -18,13 +18,15 @@ pub async fn send_onchain_boarding_output() {
 
     let nigiri = Arc::new(Nigiri::new());
 
-    // To be able to spend a boarding output it needs to have been confirmed for at least 2_048
-    // seconds.
-    nigiri.set_outpoint_blocktime_offset(2_048);
-
     let secp = Secp256k1::new();
 
     let alice = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
+
+    // To be able to spend a boarding output it needs to have been confirmed for at least
+    // `boarding_exit_delay` seconds.
+    let boarding_exit_delay = alice.boarding_exit_delay_seconds();
+
+    nigiri.set_outpoint_blocktime_offset(boarding_exit_delay);
 
     let alice_boarding_address = alice.get_boarding_address().unwrap();
 

@@ -62,6 +62,10 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
             bitcoin::Sequence::from_seconds_ceil(value.unilateral_exit_delay as u32)
                 .map_err(Error::conversion)?;
 
+        let boarding_exit_delay =
+            bitcoin::Sequence::from_seconds_ceil(value.boarding_exit_delay as u32)
+                .map_err(Error::conversion)?;
+
         let network = Network::from_str(value.network.as_str()).map_err(Error::conversion)?;
         let network = bitcoin::Network::from(network);
 
@@ -71,16 +75,42 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
             .require_network(network)
             .map_err(Error::conversion)?;
 
+        let utxo_min_amount = match value.utxo_min_amount.is_positive() {
+            true => Some(Amount::from_sat(value.utxo_min_amount as u64)),
+            false => None,
+        };
+
+        let utxo_max_amount = match value.utxo_max_amount.is_positive() {
+            true => Some(Amount::from_sat(value.utxo_max_amount as u64)),
+            false => None,
+        };
+
+        let vtxo_min_amount = match value.vtxo_min_amount.is_positive() {
+            true => Some(Amount::from_sat(value.vtxo_min_amount as u64)),
+            false => None,
+        };
+
+        let vtxo_max_amount = match value.vtxo_max_amount.is_positive() {
+            true => Some(Amount::from_sat(value.vtxo_max_amount as u64)),
+            false => None,
+        };
+
         Ok(Self {
             pk,
             vtxo_tree_expiry,
             unilateral_exit_delay,
+            boarding_exit_delay,
             round_interval: value.round_interval,
             network,
             dust: Amount::from_sat(value.dust as u64),
             boarding_descriptor_template: value.boarding_descriptor_template,
             vtxo_descriptor_templates: value.vtxo_descriptor_templates,
             forfeit_address,
+            version: value.version,
+            utxo_min_amount,
+            utxo_max_amount,
+            vtxo_min_amount,
+            vtxo_max_amount,
         })
     }
 }
