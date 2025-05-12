@@ -52,21 +52,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
-  wasm:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: extractions/setup-just@v2
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Build crates for WASM
-        env:
-          CC: gcc
-        run: just build-wasm
-
   unit-tests:
     runs-on: ubuntu-latest
     needs: [ clippy ]
@@ -92,3 +77,49 @@ jobs:
     uses: ./.github/workflows/e2e-core.yml
     with:
       arkd-version: ${{ matrix.arkd-version }}
+
+  wasm_ubuntu:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest ]
+        arkd-version: [ 'v0.5.9' ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build crates for WASM
+        run: just build-wasm
+
+  wasm_macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ macos-latest ]
+        arkd-version: [ 'v0.5.9' ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install LLVM and Clang
+        if: contains(matrix.os, 'macos')
+        run: brew install llvm
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build crates for WASM
+        run: PATH="/opt/homebrew/opt/llvm/bin:$PATH" cargo build -p ark-core -p ark-rest --target wasm32-unknown-unknown

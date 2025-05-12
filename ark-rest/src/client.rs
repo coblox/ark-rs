@@ -29,16 +29,14 @@ impl Client {
     }
 
     pub async fn get_info(&self) -> Result<ark_core::server::Info, Error> {
-        let _info = ark_service_get_info(&self.configuration).await?;
+        let info = ark_service_get_info(&self.configuration).await?;
 
-        // TODO: Mapping from the `ark-rest` generated types to the `ark_core` types is too much of
+        // TODO: Mapping from the `ark-rest` generated types to the `ark_core` types is alot of
         // a pain given that every field is currently optional. We are waiting for an update to the
-        // swagger file to continue.
+        // swagger file to make this nicer
 
-        //let info = info.try_into()?;
+        let info = info.try_into().map_err(|e| Error(Box::new(e)))?;
 
-        // Ok(info)
-
-        todo!()
+        Ok(info)
     }
 }
