@@ -1,4 +1,4 @@
-set dotenv-load
+set dotenv-load := true
 
 arkd_url := "http://localhost:7070"
 arkd_wallet_port := "6060"
@@ -36,70 +36,70 @@ gen-grpc:
 ## -------------------------
 ## Local development setup
 ## -------------------------
-
 # Checkout ark (https://github.com/ark-network/ark) in a local directory
 # Run with `just arkd-checkout "master"`  to checkout and sync latest master or
+
 # `just arkd-checkout "da64028e06056b115d91588fb1103021b04008ad"`to checkout a specific commit
 [positional-arguments]
 arkd-checkout tag:
-     #!/usr/bin/env bash
+    #!/usr/bin/env bash
 
-     set -euxo pipefail
+    set -euxo pipefail
 
-     mkdir -p $ARK_GO_DIR
-     cd $ARK_GO_DIR
+    mkdir -p $ARK_GO_DIR
+    cd $ARK_GO_DIR
 
-     CHANGES_STASHED=false
+    CHANGES_STASHED=false
 
-     if [ -d "ark" ]; then
-         # Repository exists, update it
-         echo "Directory exists, refreshing..."
-         cd ark
+    if [ -d "ark" ]; then
+        # Repository exists, update it
+        echo "Directory exists, refreshing..."
+        cd ark
 
-         # Check for local changes and stash them if they exist
-         if ! git diff --quiet || ! git diff --staged --quiet; then
-             echo "Stashing local changes..."
-             git stash push -m "Automated stash before update"
-             CHANGES_STASHED=true
-         fi
+        # Check for local changes and stash them if they exist
+        if ! git diff --quiet || ! git diff --staged --quiet; then
+            echo "Stashing local changes..."
+            git stash push -m "Automated stash before update"
+            CHANGES_STASHED=true
+        fi
 
-         git fetch --all
+        git fetch --all
 
-         # Only update master if we're not going to check it out explicitly
-         if [ -z "$1" ] || [ "$1" != "master" ]; then
-             # Store current branch
-             CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        # Only update master if we're not going to check it out explicitly
+        if [ -z "$1" ] || [ "$1" != "master" ]; then
+            # Store current branch
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
-             # Update master branch
-             git checkout master
-             git pull origin master
+            # Update master branch
+            git checkout master
+            git pull origin master
 
-             # Return to original branch
-             if [ "$CURRENT_BRANCH" != "master" ]; then
-                 git checkout "$CURRENT_BRANCH"
-             fi
-         fi
+            # Return to original branch
+            if [ "$CURRENT_BRANCH" != "master" ]; then
+                git checkout "$CURRENT_BRANCH"
+            fi
+        fi
 
-     else
-         echo "Directory does not exist, checking it out..."
-         # Clone new repository
-         git clone https://github.com/ark-network/ark.git
-         cd ark
-     fi
+    else
+        echo "Directory does not exist, checking it out..."
+        # Clone new repository
+        git clone https://github.com/ark-network/ark.git
+        cd ark
+    fi
 
-     if [ ! -z "$1" ]; then
-         echo "Checking out " $1
-         git checkout $1
-     else
-         echo "Checking out master"
-         git checkout master
-     fi
+    if [ ! -z "$1" ]; then
+        echo "Checking out " $1
+        git checkout $1
+    else
+        echo "Checking out master"
+        git checkout master
+    fi
 
-     # Reapply stashed changes if they exist
-     if [ "$CHANGES_STASHED" = true ]; then
-         echo "Reapplying local changes..."
-         git stash pop
-     fi
+    # Reapply stashed changes if they exist
+    if [ "$CHANGES_STASHED" = true ]; then
+        echo "Reapplying local changes..."
+        git stash pop
+    fi
 
 # Set up `arkd` so that we can run the client e2e tests against it.
 arkd-setup:
@@ -142,11 +142,11 @@ arkd-wallet-run:
 
     set -euxo pipefail
 
-    make run-bitcoind -C $ARKD_WALLET_DIR run &> {{arkd_wallet_logs}} &
+    make run-bitcoind -C $ARKD_WALLET_DIR run &> {{ arkd_wallet_logs }} &
 
     just arkd-wallet-init
 
-    echo "Arkd wallet started. Find the logs in {{arkd_wallet_logs}}"
+    echo "Arkd wallet started. Find the logs in {{ arkd_wallet_logs }}"
 
 # Start `arkd` binary.
 arkd-run:
@@ -154,9 +154,9 @@ arkd-run:
 
     set -euxo pipefail
 
-    make -C $ARKD_DIR run &> {{arkd_logs}} &
+    make -C $ARKD_DIR run &> {{ arkd_logs }} &
 
-    echo "Arkd started. Find the logs in {{arkd_logs}}"
+    echo "Arkd started. Find the logs in {{ arkd_logs }}"
 
 # Build `arkd` binary.
 arkd-build:
@@ -174,13 +174,13 @@ arkd-wallet-init:
 
     set -euxo pipefail
 
-    seed=$(curl -s {{arkd_wallet_url}}/v1/wallet/seed | jq .seed -r)
+    seed=$(curl -s {{ arkd_wallet_url }}/v1/wallet/seed | jq .seed -r)
 
-    curl -s --data-binary '{"seed": "$seed", "password": "password"}' -H "Content-Type: application/json" {{arkd_wallet_url}}/v1/wallet/create
+    curl -s --data-binary '{"seed": "$seed", "password": "password"}' -H "Content-Type: application/json" {{ arkd_wallet_url }}/v1/wallet/create
 
     echo "Created arkd wallet"
 
-    curl -s --data-binary '{"password" : "password"}' -H "Content-Type: application/json" {{arkd_wallet_url}}/v1/wallet/unlock
+    curl -s --data-binary '{"password" : "password"}' -H "Content-Type: application/json" {{ arkd_wallet_url }}/v1/wallet/unlock
 
     echo "Unlocked arkd wallet"
 
@@ -192,9 +192,9 @@ arkd-fund n:
 
     set -euxo pipefail
 
-    for i in {1..{{n}}}; do
+    for i in {1..{{ n }}}; do
         address=$(curl -s -X 'POST' \
-                    {{arkd_wallet_url}}/v1/wallet/derive-addresses \
+                    {{ arkd_wallet_url }}/v1/wallet/derive-addresses \
                     -H 'accept: application/json' \
                     -H 'Content-Type: application/json' \
                     -d '{
@@ -210,18 +210,18 @@ arkd-fund n:
 # Stop `arkd` binary and delete logs.
 arkd-kill:
     pkill -9 arkd && echo "Stopped arkd" || echo "Arkd not running, skipped"
-    [ ! -e "{{arkd_logs}}" ] || mv -f {{arkd_logs}} {{arkd_logs}}.old
+    [ ! -e "{{ arkd_logs }}" ] || mv -f {{ arkd_logs }} {{ arkd_logs }}.old
 
 # Stop `arkd-wallet` binary and delete logs.
 arkd-wallet-kill:
     #!/usr/bin/env bash
-    pid=$(lsof -ti :{{arkd_wallet_port}})
+    pid=$(lsof -ti :{{ arkd_wallet_port }})
     if [ -n "$pid" ]; then \
-        kill -9 $pid && echo "Stopped arkd wallet on port {{arkd_wallet_port}}" || echo "Failed to stop arkd wallet"; \
+        kill -9 $pid && echo "Stopped arkd wallet on port {{ arkd_wallet_port }}" || echo "Failed to stop arkd wallet"; \
     else \
-        echo "No process found on port {{arkd_wallet_port}}"; \
+        echo "No process found on port {{ arkd_wallet_port }}"; \
     fi
-    [ ! -e "{{arkd_wallet_logs}}" ] || mv -f {{arkd_wallet_logs}} {{arkd_wallet_logs}}.old
+    [ ! -e "{{ arkd_wallet_logs }}" ] || mv -f {{ arkd_wallet_logs }} {{ arkd_wallet_logs }}.old
 
 # Wipe `arkd` data directory.
 arkd-wipe:
@@ -239,7 +239,7 @@ _wait-until-arkd-wallet-is-ready:
     echo "Waiting for arkd wallet to be ready..."
 
     for ((i=0; i<30; i+=1)); do
-      res=$(curl -s {{arkd_wallet_url}}/v1/wallet/status)
+      res=$(curl -s {{ arkd_wallet_url }}/v1/wallet/status)
 
       if echo "$res" | jq -e '.initialized == true and .unlocked == true and .synced == true' > /dev/null; then
         echo "arkd wallet is ready!"
@@ -259,7 +259,6 @@ nigiri-start:
 nigiri-wipe:
     #!/usr/bin/env bash
     nigiri stop --delete
-
 
 ## -------------------------
 ## Running tests
