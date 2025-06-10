@@ -23,6 +23,8 @@ Cargo.lock
 /.env
 /arkd.log
 /arkd.log.old
+/arkd-wallet.log
+/arkd-wallet.log.old
 
 # Repository for arkd
 /ark-go

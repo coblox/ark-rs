@@ -1,7 +1,10 @@
 set dotenv-load
 
 arkd_url := "http://localhost:7070"
+arkd_wallet_port := "6060"
+arkd_wallet_url := "http://localhost:" + arkd_wallet_port
 arkd_logs := "$PWD/arkd.log"
+arkd_wallet_logs := "$PWD/arkd-wallet.log"
 
 ## ------------------------
 ## Code quality functions
@@ -104,13 +107,17 @@ arkd-setup:
 
     set -euxo pipefail
 
+    echo "Running arkd from $ARKD_WALLET_DIR"
+
+    just arkd-wallet-run
+
+    echo "Started arkd-wallet"
+
     echo "Running arkd from $ARKD_DIR"
 
     just arkd-run
 
     echo "Started arkd"
-
-    just arkd-init
 
     just arkd-fund 10
 
@@ -129,6 +136,18 @@ arkd-patch-makefile:
         sed -i 's/ARK_ROUND_INTERVAL=[0-9][0-9]*/ARK_ROUND_INTERVAL=30/' Makefile
     fi
 
+# Start `arkd-wallet` binary.
+arkd-wallet-run:
+    #!/usr/bin/env bash
+
+    set -euxo pipefail
+
+    make run-bitcoind -C $ARKD_WALLET_DIR run &> {{arkd_wallet_logs}} &
+
+    just arkd-wallet-init
+
+    echo "Arkd wallet started. Find the logs in {{arkd_wallet_logs}}"
+
 # Start `arkd` binary.
 arkd-run:
     #!/usr/bin/env bash
@@ -137,10 +156,7 @@ arkd-run:
 
     make -C $ARKD_DIR run &> {{arkd_logs}} &
 
-    just _wait-until-arkd-is-ready
-
     echo "Arkd started. Find the logs in {{arkd_logs}}"
-
 
 # Build `arkd` binary.
 arkd-build:
@@ -152,21 +168,19 @@ arkd-build:
 
     echo "Arkd built"
 
-
-
-# Initialize `arkd` by creating and unlocking a new wallet.
-arkd-init:
+# Initialize `arkd-wallet` by creating and unlocking a new wallet.
+arkd-wallet-init:
     #!/usr/bin/env bash
 
     set -euxo pipefail
 
-    seed=$(curl -s {{arkd_url}}/v1/admin/wallet/seed | jq .seed -r)
+    seed=$(curl -s {{arkd_wallet_url}}/v1/wallet/seed | jq .seed -r)
 
-    curl -s --data-binary '{"seed": "$seed", "password": "password"}' -H "Content-Type: application/json" {{arkd_url}}/v1/admin/wallet/create
+    curl -s --data-binary '{"seed": "$seed", "password": "password"}' -H "Content-Type: application/json" {{arkd_wallet_url}}/v1/wallet/create
 
     echo "Created arkd wallet"
 
-    curl -s --data-binary '{"password" : "password"}' -H "Content-Type: application/json" {{arkd_url}}/v1/admin/wallet/unlock
+    curl -s --data-binary '{"password" : "password"}' -H "Content-Type: application/json" {{arkd_wallet_url}}/v1/wallet/unlock
 
     echo "Unlocked arkd wallet"
 
@@ -179,7 +193,14 @@ arkd-fund n:
     set -euxo pipefail
 
     for i in {1..{{n}}}; do
-        address=$(curl -s {{arkd_url}}/v1/admin/wallet/address | jq .address -r)
+        address=$(curl -s -X 'POST' \
+                    {{arkd_wallet_url}}/v1/wallet/derive-addresses \
+                    -H 'accept: application/json' \
+                    -H 'Content-Type: application/json' \
+                    -d '{
+                    "num": 1
+                  }' | jq -r '.addresses[0]'
+        )
 
         echo "Funding arkd wallet (Iteration $i)"
 
@@ -191,29 +212,26 @@ arkd-kill:
     pkill -9 arkd && echo "Stopped arkd" || echo "Arkd not running, skipped"
     [ ! -e "{{arkd_logs}}" ] || mv -f {{arkd_logs}} {{arkd_logs}}.old
 
+# Stop `arkd-wallet` binary and delete logs.
+arkd-wallet-kill:
+    #!/usr/bin/env bash
+    pid=$(lsof -ti :{{arkd_wallet_port}})
+    if [ -n "$pid" ]; then \
+        kill -9 $pid && echo "Stopped arkd wallet on port {{arkd_wallet_port}}" || echo "Failed to stop arkd wallet"; \
+    else \
+        echo "No process found on port {{arkd_wallet_port}}"; \
+    fi
+    [ ! -e "{{arkd_wallet_logs}}" ] || mv -f {{arkd_wallet_logs}} {{arkd_wallet_logs}}.old
+
 # Wipe `arkd` data directory.
 arkd-wipe:
     @echo Clearing arkd in $ARKD_DIR/data
     rm -rf $ARKD_DIR/data
 
-_wait-until-arkd-is-ready:
-    #!/usr/bin/env bash
-
-    echo "Waiting for arkd to be ready..."
-
-    for ((i=0; i<30; i+=1)); do
-      status_code=$(curl -o /dev/null -s -w "%{http_code}" {{arkd_url}}/v1/admin/wallet/seed)
-
-      if [ "$status_code" -eq 200 ]; then
-        echo "arkd is ready!"
-        exit 0
-      fi
-      sleep 1
-    done
-
-    echo "arkd was not ready in time"
-
-    exit 1
+# Wipe `arkd-wallet` data directory.
+arkd-wallet-wipe:
+    @echo Clearing arkd in $ARKD_WALLET_DIR/data
+    rm -rf $ARKD_WALLET_DIR/data
 
 _wait-until-arkd-wallet-is-ready:
     #!/usr/bin/env bash
@@ -221,7 +239,7 @@ _wait-until-arkd-wallet-is-ready:
     echo "Waiting for arkd wallet to be ready..."
 
     for ((i=0; i<30; i+=1)); do
-      res=$(curl -s {{arkd_url}}/v1/admin/wallet/status)
+      res=$(curl -s {{arkd_wallet_url}}/v1/wallet/status)
 
       if echo "$res" | jq -e '.initialized == true and .unlocked == true and .synced == true' > /dev/null; then
         echo "arkd wallet is ready!"
