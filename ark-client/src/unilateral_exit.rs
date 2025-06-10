@@ -76,13 +76,16 @@ where
         let blockchain = &self.blockchain();
 
         let off_board_txs_len = off_board_txs.len();
-        for (i, tx) in off_board_txs.iter().enumerate() {
-            let txid = tx.compute_txid();
+        for (i, parent_tx) in off_board_txs.iter().enumerate() {
+            let txid = parent_tx.compute_txid();
 
             let is_not_published = blockchain.find_tx(&txid).await?.is_none();
             if is_not_published {
-                tracing::info!(%txid, "Broadcasting VTXO transaction");
-                let broadcast = || async { blockchain.broadcast(tx).await };
+                tracing::info!(%txid, "Broadcasting VTXO transaction and bumped transaction");
+                let child_tx = self.bump_anchor_tx(parent_tx).await?;
+
+                let broadcast =
+                    || async { blockchain.broadcast_package(&[parent_tx, &child_tx]).await };
 
                 broadcast
                     .retry(ExponentialBuilder::default().with_max_times(5))

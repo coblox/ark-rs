@@ -14,7 +14,7 @@ use std::sync::Arc;
 mod common;
 
 #[tokio::test]
-#[ignore]
+// #[ignore]
 pub async fn send_onchain_vtxo_and_boarding_output() {
     init_tracing();
 
@@ -35,6 +35,12 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
 
     nigiri
         .faucet_fund(&alice_boarding_address, fund_amount)
+        .await;
+    // we need to provide alice more funds to bump the anchor output
+
+    let alice_onchain_address = alice.get_onchain_address().unwrap();
+    nigiri
+        .faucet_fund(&alice_onchain_address, fund_amount)
         .await;
 
     let offchain_balance = alice.offchain_balance().await.unwrap();

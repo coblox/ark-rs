@@ -2,6 +2,7 @@ use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use ark_core::generate_incoming_vtxo_transaction_history;
 use ark_core::generate_outgoing_vtxo_transaction_history;
+use ark_core::redeem::anchor_output;
 use ark_core::server;
 use ark_core::server::Round;
 use ark_core::server::VtxoOutPoint;
@@ -15,8 +16,13 @@ use bitcoin::secp256k1::All;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
+use bitcoin::Psbt;
+use bitcoin::Sequence;
 use bitcoin::Transaction;
+use bitcoin::TxIn;
+use bitcoin::TxOut;
 use bitcoin::Txid;
+use bitcoin::Weight;
 use futures::Future;
 use jiff::Timestamp;
 use std::sync::Arc;
@@ -70,6 +76,10 @@ pub use error::Error;
 /// #     }
 /// #
 /// #     async fn broadcast(&self, tx: &Transaction) -> Result<(), Error> {
+/// #         unimplemented!()
+/// #     }
+/// #
+/// #     async fn get_fee_rate(&self) -> Result<f64, Error> {
 /// #         unimplemented!()
 /// #     }
 /// # }
@@ -128,7 +138,6 @@ pub use error::Error;
 /// #         &self,
 /// #         server_pk: XOnlyPublicKey,
 /// #         exit_delay: bitcoin::Sequence,
-/// #         descriptor_template: &str,
 /// #         network: Network,
 /// #     ) -> Result<BoardingOutput, Error> {
 /// #         unimplemented!()
@@ -262,6 +271,13 @@ pub trait Blockchain {
     ) -> impl Future<Output = Result<SpendStatus, Error>> + Send;
 
     fn broadcast(&self, tx: &Transaction) -> impl Future<Output = Result<(), Error>> + Send;
+
+    fn get_fee_rate(&self) -> impl Future<Output = Result<f64, Error>> + Send;
+
+    fn broadcast_package(
+        &self,
+        txs: &[&Transaction],
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
 impl<B, W> OfflineClient<B, W>
@@ -351,6 +367,10 @@ where
         )?;
 
         Ok(boarding_output.address().clone())
+    }
+
+    pub fn get_onchain_address(&self) -> Result<Address, Error> {
+        self.inner.wallet.get_onchain_address()
     }
 
     pub fn get_boarding_addresses(&self) -> Result<Vec<Address>, Error> {
@@ -575,4 +595,141 @@ where
     fn blockchain(&self) -> &B {
         &self.inner.blockchain
     }
+
+    /// Bump the fee of an anchor transaction by creating a child transaction with higher fees
+    pub async fn bump_anchor_tx(&self, parent: &Transaction) -> Result<Transaction, Error> {
+        let anchor = find_anchor_outpoint(parent)?;
+
+        // Estimate for the size of the bump transaction
+        const P2TR_KEYSPEND_INPUT_WEIGHT: u64 = 57 * 4 + 64; // 292 weight units
+        const NESTED_P2WSH_INPUT_WEIGHT: u64 = 91 * 4 + 3 * 4; // 376 weight units
+        const P2TR_OUTPUT_WEIGHT: u64 = 43 * 4; // 172 weight units
+
+        // We assume only one UTXO will be selected to have a correct estimation
+        let estimated_weight = Weight::from_wu(
+            NESTED_P2WSH_INPUT_WEIGHT + P2TR_KEYSPEND_INPUT_WEIGHT + P2TR_OUTPUT_WEIGHT,
+        );
+
+        let child_vsize = estimated_weight.to_vbytes_ceil();
+        let package_size = child_vsize + compute_vsize(parent);
+
+        let fee_rate = self.blockchain().get_fee_rate().await?;
+        let fees = Amount::from_sat((package_size as f64 * fee_rate).ceil() as u64);
+
+        // Get wallet addresses for coin selection
+        let addresses = self.get_onchain_addresses().await?;
+
+        let mut selected_coins = Vec::new();
+        let mut selected_amount = Amount::ZERO;
+        let amount_to_select = fees; // Anchor has 0 value
+
+        for address in addresses {
+            let utxos = self.blockchain().find_outpoints(&address).await?;
+
+            for utxo in utxos {
+                if !utxo.is_spent {
+                    selected_coins.push(utxo);
+                    selected_amount += utxo.amount;
+                    if selected_amount >= amount_to_select {
+                        break;
+                    }
+                }
+            }
+            if selected_amount >= amount_to_select {
+                break;
+            }
+        }
+
+        if selected_amount < amount_to_select {
+            return Err(Error::ad_hoc(format!(
+                "not enough funds to select {} sats",
+                amount_to_select.to_sat()
+            )));
+        }
+
+        let change_amount = selected_amount - fees;
+
+        // Get a new address for change
+        let new_addr = self.inner.wallet.get_onchain_address()?;
+
+        // Build inputs and outputs
+        let mut inputs = vec![anchor];
+        let mut sequences = vec![Sequence::MAX];
+
+        for utxo in &selected_coins {
+            inputs.push(utxo.outpoint);
+            sequences.push(Sequence::MAX);
+        }
+
+        let outputs = vec![TxOut {
+            value: change_amount,
+            script_pubkey: new_addr.script_pubkey(),
+        }];
+
+        // Create PSBT
+        let mut psbt = Psbt::from_unsigned_tx(Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: inputs
+                .iter()
+                .zip(sequences.iter())
+                .map(|(outpoint, sequence)| TxIn {
+                    previous_output: *outpoint,
+                    script_sig: bitcoin::ScriptBuf::new(),
+                    sequence: *sequence,
+                    witness: bitcoin::Witness::new(),
+                })
+                .collect(),
+            output: outputs,
+        })
+        .map_err(Error::ad_hoc)?;
+
+        // Set witness UTXO for anchor input (first input)
+        psbt.inputs[0].witness_utxo = Some(anchor_output());
+
+        // Sign the transaction
+        self.inner.wallet.sign(&mut psbt)?;
+
+        // Finalize all inputs except the first (anchor input)
+        for i in 1..psbt.inputs.len() {
+            psbt.inputs[i].final_script_witness =
+                psbt.inputs[i].partial_sigs.values().next().map(|sig| {
+                    let mut witness = bitcoin::Witness::new();
+                    witness.push(sig.to_vec());
+                    witness
+                });
+        }
+
+        // Extract transaction
+        dbg!("here?");
+        let tx = psbt.extract_tx().map_err(Error::ad_hoc)?;
+        dbg!("bar");
+
+        let string = bitcoin::consensus::encode::serialize_hex(&tx);
+        dbg!(string);
+        Ok(tx)
+    }
+
+    async fn get_onchain_addresses(&self) -> Result<Vec<Address>, Error> {
+        // Return onchain addresses from wallet
+        Ok(vec![self.inner.wallet.get_onchain_address()?])
+    }
+}
+
+fn find_anchor_outpoint(tx: &Transaction) -> Result<OutPoint, Error> {
+    for (index, output) in tx.output.iter().enumerate() {
+        let anchor_output_template = anchor_output();
+        if output == &anchor_output_template {
+            return Ok(OutPoint {
+                txid: tx.compute_txid(),
+                vout: index as u32,
+            });
+        }
+    }
+
+    Err(Error::ad_hoc("Anchor output not found in transaction"))
+}
+
+fn compute_vsize(tx: &Transaction) -> u64 {
+    tx.weight().to_vbytes_ceil()
 }

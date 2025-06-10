@@ -28,6 +28,7 @@ use std::io::Write;
 
 /// The byte value corresponds to the string "taptree".
 const VTXO_TAPROOT_KEY: [u8; 7] = [116, 97, 112, 116, 114, 101, 101];
+const ANCHOR_SCRIPT_PUBKEY: [u8; 4] = [0x51, 0x02, 0x4e, 0x73];
 
 /// A VTXO to be spent into an unconfirmed VTXO.
 #[derive(Debug, Clone)]
@@ -50,9 +51,7 @@ impl VtxoInput {
     }
 }
 
-fn anchor_output() -> TxOut {
-    const ANCHOR_SCRIPT_PUBKEY: [u8; 4] = [0x51, 0x02, 0x4e, 0x73];
-
+pub fn anchor_output() -> TxOut {
     let script_pubkey = ScriptBuf::from_bytes(ANCHOR_SCRIPT_PUBKEY.to_vec());
 
     TxOut {

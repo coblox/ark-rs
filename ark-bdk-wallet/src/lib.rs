@@ -165,11 +165,17 @@ where
     }
 
     fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error> {
+        let options = SignOptions {
+            trust_witness_utxo: true,
+
+            ..SignOptions::default()
+        };
+
         let finalized = self
             .inner
             .read()
             .expect("read lock")
-            .sign(psbt, SignOptions::default())
+            .sign(psbt, options)
             .map_err(Error::wallet)?;
 
         Ok(finalized)

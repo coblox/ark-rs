@@ -39,6 +39,14 @@ pub struct Nigiri {
     /// This can be used to ensure that certain outpoints are considered spendable, which is useful
     /// for testing scripts with opcodes such as `OP_CSV`.
     outpoint_blocktime_offset: RwLock<u64>,
+    /// Bitcoin Core RPC client for package submission
+    rpc_client: reqwest::Client,
+    /// Bitcoin Core RPC URL
+    rpc_url: String,
+    /// Bitcoin Core RPC username
+    rpc_username: String,
+    /// Bitcoin Core RPC password
+    rpc_password: String,
 }
 
 impl Nigiri {
@@ -49,6 +57,10 @@ impl Nigiri {
         Self {
             esplora_client,
             outpoint_blocktime_offset: RwLock::new(0),
+            rpc_client: reqwest::Client::new(),
+            rpc_url: "http://localhost:18443".to_string(), // Default regtest port
+            rpc_username: "admin".to_string(),             // Default nigiri credentials
+            rpc_password: "admin".to_string(),
         }
     }
 
@@ -211,6 +223,59 @@ impl Blockchain for Nigiri {
     async fn broadcast(&self, tx: &Transaction) -> Result<(), Error> {
         self.esplora_client.broadcast(tx).unwrap();
 
+        Ok(())
+    }
+
+    async fn get_fee_rate(&self) -> Result<f64, Error> {
+        Ok(1.0)
+    }
+
+    async fn broadcast_package(&self, txs: &[&Transaction]) -> Result<(), Error> {
+        // Serialize transactions to hex strings
+        let tx_hexes = txs
+            .iter()
+            .map(bitcoin::consensus::encode::serialize_hex)
+            .collect::<Vec<_>>();
+
+        // Create RPC request
+        let rpc_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "submitpackage",
+            "method": "submitpackage",
+            "params": [tx_hexes]
+        });
+
+        // Make RPC call
+        let response = self
+            .rpc_client
+            .post(&self.rpc_url)
+            .basic_auth(&self.rpc_username, Some(&self.rpc_password))
+            .json(&rpc_request)
+            .send()
+            .await
+            .unwrap();
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap();
+
+        if !status.is_success() {
+            panic!("RPC call failed with status {}: {}", status, response_text);
+        }
+
+        // Parse response
+        let rpc_response: serde_json::Value = serde_json::from_str(&response_text).unwrap();
+
+        // Check for RPC errors
+        if let Some(error) = rpc_response.get("error") {
+            if !error.is_null() {
+                panic!("RPC error: {}", error);
+            }
+        }
+
+        tracing::debug!(
+            "Successfully submitted package of {} transactions",
+            txs.len()
+        );
         Ok(())
     }
 }
