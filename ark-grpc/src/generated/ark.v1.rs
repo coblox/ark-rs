@@ -29,18 +29,8 @@ pub struct Outpoint {
 pub struct Input {
     #[prost(message, optional, tag = "1")]
     pub outpoint: ::core::option::Option<Outpoint>,
-    #[prost(oneof = "input::TaprootTree", tags = "2, 3")]
-    pub taproot_tree: ::core::option::Option<input::TaprootTree>,
-}
-/// Nested message and enum types in `Input`.
-pub mod input {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum TaprootTree {
-        #[prost(string, tag = "2")]
-        Descriptor(::prost::alloc::string::String),
-        #[prost(message, tag = "3")]
-        Tapscripts(super::Tapscripts),
-    }
+    #[prost(message, optional, tag = "2")]
+    pub taproot_tree: ::core::option::Option<Tapscripts>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Output {
@@ -172,13 +162,11 @@ pub struct TxRequestInfo {
     pub inputs: ::prost::alloc::vec::Vec<RequestInput>,
     #[prost(message, repeated, tag = "5")]
     pub boarding_inputs: ::prost::alloc::vec::Vec<RequestInput>,
-    #[prost(string, repeated, tag = "6")]
-    pub notes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(string, tag = "7")]
+    #[prost(string, tag = "6")]
     pub signing_type: ::prost::alloc::string::String,
-    #[prost(string, repeated, tag = "8")]
+    #[prost(string, repeated, tag = "7")]
     pub cosigners_public_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(int64, tag = "9")]
+    #[prost(int64, tag = "8")]
     pub last_ping: i64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -637,28 +625,24 @@ pub struct GetInfoResponse {
     #[prost(int64, tag = "6")]
     pub dust: i64,
     #[prost(string, tag = "7")]
-    pub boarding_descriptor_template: ::prost::alloc::string::String,
-    #[prost(string, repeated, tag = "8")]
-    pub vtxo_descriptor_templates: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(string, tag = "9")]
     pub forfeit_address: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "10")]
+    #[prost(message, optional, tag = "8")]
     pub market_hour: ::core::option::Option<MarketHour>,
-    #[prost(string, tag = "11")]
+    #[prost(string, tag = "9")]
     pub version: ::prost::alloc::string::String,
     /// -1 means native dust limit (default)
-    #[prost(int64, tag = "12")]
+    #[prost(int64, tag = "10")]
     pub utxo_min_amount: i64,
     /// -1 means no limit (default), 0 means boarding not allowed
-    #[prost(int64, tag = "13")]
+    #[prost(int64, tag = "11")]
     pub utxo_max_amount: i64,
     /// -1 means native dust limit (default)
-    #[prost(int64, tag = "14")]
+    #[prost(int64, tag = "12")]
     pub vtxo_min_amount: i64,
     /// -1 means no limit (default)
-    #[prost(int64, tag = "15")]
+    #[prost(int64, tag = "13")]
     pub vtxo_max_amount: i64,
-    #[prost(int64, tag = "16")]
+    #[prost(int64, tag = "14")]
     pub boarding_exit_delay: i64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -670,26 +654,14 @@ pub struct GetBoardingAddressRequest {
 pub struct GetBoardingAddressResponse {
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
-    #[prost(oneof = "get_boarding_address_response::TaprootTree", tags = "2, 3")]
-    pub taproot_tree: ::core::option::Option<get_boarding_address_response::TaprootTree>,
-}
-/// Nested message and enum types in `GetBoardingAddressResponse`.
-pub mod get_boarding_address_response {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum TaprootTree {
-        #[prost(string, tag = "2")]
-        Descriptor(::prost::alloc::string::String),
-        #[prost(message, tag = "3")]
-        Tapscripts(super::Tapscripts),
-    }
+    #[prost(message, optional, tag = "2")]
+    pub taproot_tree: ::core::option::Option<Tapscripts>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterIntentRequest {
     /// BIP322 signature embeds the outpoints and the proof of funds
     #[prost(message, optional, tag = "1")]
     pub bip322_signature: ::core::option::Option<Bip322Signature>,
-    #[prost(string, repeated, tag = "2")]
-    pub notes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterIntentResponse {
@@ -700,8 +672,6 @@ pub struct RegisterIntentResponse {
 pub struct RegisterInputsForNextRoundRequest {
     #[prost(message, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<Input>,
-    #[prost(string, repeated, tag = "2")]
-    pub notes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterInputsForNextRoundResponse {
@@ -1150,11 +1120,8 @@ pub struct UnlockRequest {
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UnlockResponse {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct LockRequest {
-    #[prost(string, tag = "1")]
-    pub password: ::prost::alloc::string::String,
-}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct LockRequest {}
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct LockResponse {}
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -1810,6 +1777,20 @@ pub struct GetVtxosResponse {
     pub page: ::core::option::Option<IndexerPageResponse>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxosByOutpointRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub outpoints: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetVtxosByOutpointResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
+    #[prost(message, optional, tag = "2")]
+    pub page: ::core::option::Option<IndexerPageResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetTransactionHistoryRequest {
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
@@ -2250,6 +2231,24 @@ pub mod indexer_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.IndexerService", "GetVtxos"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_vtxos_by_outpoint(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetVtxosByOutpointRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetVtxosByOutpointResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetVtxosByOutpoint");
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.IndexerService",
+                "GetVtxosByOutpoint",
+            ));
             self.inner.unary(req, path, codec).await
         }
         pub async fn get_transaction_history(

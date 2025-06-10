@@ -1,6 +1,6 @@
 [package]
 name = "ark-client"
-version = "0.5.9"
+version = "0.7.0"
 edition = "2021"
 license = "MIT"
 description = "Main client library for interacting with Ark servers"
@@ -9,7 +9,7 @@ description = "Main client library for interacting with Ark servers"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(genproto)'] }
 
 [dependencies]
-ark-core = { path = "../ark-core", version = "0.5.9" }
+ark-core = { path = "../ark-core", version = "0.7.0" }
 async-stream = "0.3"
 base64 = "0.22.1"
 bech32 = "0.11"
@@ -24,7 +24,7 @@ tokio = { version = "1.41.0", features = ["sync"] }
 tracing = "0.1.37"
 
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
-ark-grpc = { path = "../ark-grpc", version = "0.5.9" }
+ark-grpc = { path = "../ark-grpc", version = "0.7.0" }
 backon = { version = "1", features = ["tokio-sleep"] }
 tonic = { version = "0.12", features = ["tls-native-roots"] }
 

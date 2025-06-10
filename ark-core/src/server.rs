@@ -85,8 +85,6 @@ pub struct Info {
     pub round_interval: i64,
     pub network: Network,
     pub dust: Amount,
-    pub boarding_descriptor_template: String,
-    pub vtxo_descriptor_templates: Vec<String>,
     pub forfeit_address: bitcoin::Address,
     pub version: String,
     pub utxo_min_amount: Option<Amount>,

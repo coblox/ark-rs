@@ -103,8 +103,6 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
             round_interval: value.round_interval,
             network,
             dust: Amount::from_sat(value.dust as u64),
-            boarding_descriptor_template: value.boarding_descriptor_template,
-            vtxo_descriptor_templates: value.vtxo_descriptor_templates,
             forfeit_address,
             version: value.version,
             utxo_min_amount,

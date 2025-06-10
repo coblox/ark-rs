@@ -99,8 +99,6 @@ pub enum ConversionError {
     MissingRoundInterval,
     MissingNetwork,
     MissingDust,
-    MissingBoardingDescriptorTemplate,
-    MissingVtxoDescriptorTemplate,
     MissingForfeitAddress,
     InvalidNetwork,
     ParseError(&'static str),
@@ -126,13 +124,7 @@ impl fmt::Display for ConversionError {
             ConversionError::MissingRoundInterval => write!(f, "Missing round interval field"),
             ConversionError::MissingNetwork => write!(f, "Missing network field"),
             ConversionError::MissingDust => write!(f, "Missing dust field"),
-            ConversionError::MissingBoardingDescriptorTemplate => {
-                write!(f, "Missing boarding descriptor template field")
-            }
             ConversionError::InvalidNetwork => write!(f, "Invalid network value"),
-            ConversionError::MissingVtxoDescriptorTemplate => {
-                write!(f, "Missing vtxo descriptor template",)
-            }
             ConversionError::MissingForfeitAddress => write!(f, "Missing forfeit address"),
             ConversionError::MissingVersion => write!(f, "Missing version field"),
             ConversionError::ParseError(msg) => write!(f, "Parse error: {}", msg),
@@ -193,13 +185,6 @@ impl TryFrom<V1GetInfoResponse> for ark_core::server::Info {
             .parse()
             .map_err(|_| ConversionError::ParseError("Failed parsing forfeit address"))?;
 
-        let vtxo_descriptor_templates = value
-            .vtxo_descriptor_templates
-            .ok_or(ConversionError::MissingVtxoDescriptorTemplate)?;
-        let boarding_descriptor_template = value
-            .boarding_descriptor_template
-            .ok_or(ConversionError::MissingBoardingDescriptorTemplate)?;
-
         let version = value.version.ok_or(ConversionError::MissingVersion)?;
 
         let utxo_min_amount = value
@@ -254,8 +239,6 @@ impl TryFrom<V1GetInfoResponse> for ark_core::server::Info {
             round_interval,
             network,
             dust,
-            boarding_descriptor_template,
-            vtxo_descriptor_templates,
             forfeit_address: forfeit_address.assume_checked(),
             version,
             utxo_min_amount,

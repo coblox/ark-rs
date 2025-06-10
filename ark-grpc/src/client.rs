@@ -160,8 +160,6 @@ impl Client {
                 signature: proof.serialize(),
                 message: intent_message.encode().map_err(Error::conversion)?,
             }),
-            // TODO: Notes not supported yet.
-            notes: Vec::new(),
         };
 
         let response = client
