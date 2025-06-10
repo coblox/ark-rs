@@ -339,15 +339,11 @@ pub fn prepare_vtxo_tree_transactions(
             continue;
         }
 
-        let round_psbt = round
+        let round_tx = round
             .round_tx
             .clone()
             .ok_or_else(|| Error::ad_hoc("missing round TX"))?;
 
-        let round_tx = round_psbt
-            .clone()
-            .extract_tx()
-            .map_err(Error::transaction)?;
         let round_txid = round_tx.compute_txid();
 
         let round_vtxo_tree = round
@@ -387,7 +383,7 @@ pub fn prepare_vtxo_tree_transactions(
             .map(|node| node.tx.clone())
             .collect::<Vec<_>>();
 
-        redeem_branches.insert(vtxo_txid, (RedeemBranch { branch }, round_psbt.clone()));
+        redeem_branches.insert(vtxo_txid, (RedeemBranch { branch }, round_tx.clone()));
     }
 
     let mut tx_set = HashSet::new();
@@ -402,13 +398,12 @@ pub fn prepare_vtxo_tree_transactions(
                 redeem_branch
                     .branch
                     .iter()
+                    .map(|p| &p.unsigned_tx)
                     .chain(std::iter::once(round_psbt))
                     .find_map(|other_psbt| {
-                        (other_psbt.unsigned_tx.compute_txid() == vtxo_previous_output.txid)
-                            .then_some(
-                                other_psbt.unsigned_tx.output[vtxo_previous_output.vout as usize]
-                                    .clone(),
-                            )
+                        (other_psbt.compute_txid() == vtxo_previous_output.txid).then_some(
+                            other_psbt.output[vtxo_previous_output.vout as usize].clone(),
+                        )
                     })
             }
             .expect("witness utxo in path");

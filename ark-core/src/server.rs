@@ -5,6 +5,7 @@ use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
+use bitcoin::Transaction;
 use bitcoin::Txid;
 use musig::musig;
 use std::collections::HashMap;
@@ -52,7 +53,7 @@ pub struct Round {
     pub id: String,
     pub start: i64,
     pub end: i64,
-    pub round_tx: Option<Psbt>,
+    pub round_tx: Option<Transaction>,
     pub vtxo_tree: Option<TxTree>,
     pub forfeit_txs: Vec<Psbt>,
     pub connector_tree: Option<TxTree>,

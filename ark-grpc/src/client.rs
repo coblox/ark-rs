@@ -607,10 +607,10 @@ impl TryFrom<generated::ark::v1::Round> for Round {
 
         let round_tx = match value.round_tx.is_empty() {
             true => None,
-            false => {
-                let psbt = base64.decode(&value.round_tx).map_err(Error::conversion)?;
-                Some(Psbt::deserialize(&psbt).map_err(Error::conversion)?)
-            }
+            false => Some(
+                bitcoin::consensus::encode::deserialize_hex(&value.round_tx)
+                    .map_err(Error::conversion)?,
+            ),
         };
 
         let vtxo_tree = value

@@ -28,7 +28,10 @@ where
 {
     /// Publish all the relevant transactions in the VTXO tree to get our VTXOs on chain.
     pub async fn commit_vtxos_on_chain(&self) -> Result<(), Error> {
-        let spendable_vtxos = self.spendable_vtxos().await?;
+        let spendable_vtxos = self
+            .spendable_vtxos()
+            .await
+            .context("failed to get spendable VTXOs")?;
 
         let network_client = &self.network_client();
         let vtxos = spendable_vtxos
