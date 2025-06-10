@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use crate::common::wait_until_balance;
 use bitcoin::key::Secp256k1;
 use bitcoin::Amount;
 use common::init_tracing;
@@ -97,15 +98,13 @@ pub async fn e2e() {
         "Sent VTXO from Alice to Bob"
     );
 
-    let redeem_tx_fee = redeem_tx.fee().unwrap();
-
-    assert_eq!(alice_offchain_balance.confirmed(), Amount::ZERO);
-    assert_eq!(
-        alice_offchain_balance.pending(),
-        alice_fund_amount - send_to_bob_vtxo_amount - redeem_tx_fee
-    );
-    assert_eq!(bob_offchain_balance.confirmed(), Amount::ZERO);
-    assert_eq!(bob_offchain_balance.pending(), send_to_bob_vtxo_amount);
+    wait_until_balance(
+        &alice,
+        Amount::ZERO,
+        alice_fund_amount - send_to_bob_vtxo_amount,
+    )
+    .await;
+    wait_until_balance(&bob, Amount::ZERO, send_to_bob_vtxo_amount).await;
 
     bob.board(&mut rng).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -122,7 +121,7 @@ pub async fn e2e() {
     assert_eq!(alice_offchain_balance.confirmed(), Amount::ZERO);
     assert_eq!(
         alice_offchain_balance.pending(),
-        alice_fund_amount - send_to_bob_vtxo_amount - redeem_tx_fee
+        alice_fund_amount - send_to_bob_vtxo_amount
     );
     assert_eq!(bob_offchain_balance.confirmed(), send_to_bob_vtxo_amount);
     assert_eq!(bob_offchain_balance.pending(), Amount::ZERO);
@@ -141,7 +140,7 @@ pub async fn e2e() {
 
     assert_eq!(
         alice_offchain_balance.confirmed(),
-        alice_fund_amount - send_to_bob_vtxo_amount - redeem_tx_fee
+        alice_fund_amount - send_to_bob_vtxo_amount
     );
     assert_eq!(alice_offchain_balance.pending(), Amount::ZERO);
     assert_eq!(bob_offchain_balance.confirmed(), send_to_bob_vtxo_amount);

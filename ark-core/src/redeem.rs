@@ -1,5 +1,3 @@
-use crate::tx_weight_estimator;
-use crate::tx_weight_estimator::compute_redeem_tx_fee;
 use crate::vtxo::Vtxo;
 use crate::ArkAddress;
 use crate::Error;
@@ -15,9 +13,9 @@ use bitcoin::taproot;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::transaction;
 use bitcoin::Amount;
-use bitcoin::FeeRate;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
+use bitcoin::ScriptBuf;
 use bitcoin::TapLeafHash;
 use bitcoin::TapSighashType;
 use bitcoin::Transaction;
@@ -52,6 +50,17 @@ impl VtxoInput {
     }
 }
 
+fn anchor_output() -> TxOut {
+    const ANCHOR_SCRIPT_PUBKEY: [u8; 4] = [0x51, 0x02, 0x4e, 0x73];
+
+    let script_pubkey = ScriptBuf::from_bytes(ANCHOR_SCRIPT_PUBKEY.to_vec());
+
+    TxOut {
+        value: Amount::ZERO,
+        script_pubkey,
+    }
+}
+
 /// Build a transaction to send VTXOs to another [`ArkAddress`].
 pub fn build_redeem_transaction(
     outputs: &[(&ArkAddress, Amount)],
@@ -81,85 +90,22 @@ pub fn build_redeem_transaction(
         ))
     })?;
 
-    let (change_index, extra_fee) = if change_amount > Amount::ZERO {
-        match change_address {
-            Some(change_address) => {
-                outputs.push(TxOut {
-                    value: change_amount,
-                    script_pubkey: change_address.to_p2tr_script_pubkey(),
-                });
-
-                (Some(outputs.len() - 1), Amount::ZERO)
-            }
-            None => (None, change_amount),
+    if change_amount > Amount::ZERO {
+        if let Some(change_address) = change_address {
+            outputs.push(TxOut {
+                value: change_amount,
+                script_pubkey: change_address.to_p2tr_script_pubkey(),
+            });
         }
-    } else {
-        (None, Amount::ZERO)
-    };
+    }
 
-    let fee = {
-        let vtxos = vtxo_inputs
-            .iter()
-            .map(
-                |VtxoInput {
-                     vtxo,
-                     amount,
-                     outpoint,
-                 }| {
-                    let (script, control_block) = vtxo.forfeit_spend_info();
-
-                    tx_weight_estimator::VtxoInput {
-                        outpoint: *outpoint,
-                        amount: *amount,
-                        revealed_script: Some(script),
-                        control_block,
-                        witness_size: Vtxo::FORFEIT_WITNESS_SIZE,
-                    }
-                },
-            )
-            .collect::<Vec<_>>();
-
-        let computed_fee = compute_redeem_tx_fee(
-            FeeRate::from_sat_per_kwu(253),
-            vtxos.as_slice(),
-            outputs.len(),
-        )?;
-
-        computed_fee + extra_fee
-    };
-
-    // Subtract the fee from somewhere.
-    //
-    // TODO: We need a more robust solution.
-    match change_index {
-        Some(change_index) => {
-            let change_output = outputs.get_mut(change_index).expect("change output");
-
-            let change_amount = change_output.value;
-            change_output.value = change_amount.checked_sub(fee).ok_or_else(|| {
-                Error::coin_select("fee ({fee}) greater than change ({change_amount})")
-            })?;
-        }
-        // If there is no change output, subtract fee evenly from all outputs.
-        _ => {
-            let fee_per_output = fee / (outputs.len() as u64);
-
-            for output in outputs.iter_mut() {
-                output.value = output.value.checked_sub(fee_per_output).ok_or_else(|| {
-                    Error::transaction(format!(
-                        "failed to subtract fee portion ({fee_per_output}) from output ({})",
-                        output.value
-                    ))
-                })?;
-            }
-        }
-    };
+    outputs.push(anchor_output());
 
     // TODO: Use a different locktime if we have CLTV multisig script.
     let lock_time = LockTime::ZERO;
 
     let unsigned_tx = Transaction {
-        version: transaction::Version::TWO,
+        version: transaction::Version::non_standard(3),
         lock_time,
         input: vtxo_inputs
             .iter()

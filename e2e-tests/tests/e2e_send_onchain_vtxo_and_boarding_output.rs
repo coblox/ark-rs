@@ -1,7 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use crate::common::InMemoryDb;
-use ark_bdk_wallet::Wallet;
+use crate::common::wait_until_balance;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::key::Secp256k1;
 use bitcoin::Amount;
@@ -11,7 +10,6 @@ use common::Nigiri;
 use rand::thread_rng;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
 mod common;
 
@@ -112,33 +110,4 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
         )
         .expect("valid input");
     }
-}
-
-async fn wait_until_balance(
-    client: &ark_client::Client<Nigiri, Wallet<InMemoryDb>>,
-    confirmed_target: Amount,
-    pending_target: Amount,
-) {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let offchain_balance = client.offchain_balance().await.unwrap();
-
-            tracing::debug!(
-                ?offchain_balance,
-                %confirmed_target,
-                %pending_target,
-                "Waiting for balance to match targets"
-            );
-
-            if offchain_balance.confirmed() == confirmed_target
-                && offchain_balance.pending() == pending_target
-            {
-                return;
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    })
-    .await
-    .unwrap();
 }

@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use ark_bdk_wallet::Wallet;
 use ark_client::error::Error;
 use ark_client::wallet::Persistence;
 use ark_client::Blockchain;
@@ -28,6 +29,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Once;
 use std::sync::RwLock;
+use std::time::Duration;
 
 pub struct Nigiri {
     esplora_client: esplora_client::BlockingClient,
@@ -91,7 +93,7 @@ impl Nigiri {
             .unwrap();
 
         // Wait for output to be confirmed.
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
 
         OutPoint {
             txid,
@@ -258,16 +260,14 @@ pub async fn set_up_client(
     name: String,
     nigiri: Arc<Nigiri>,
     secp: Secp256k1<All>,
-) -> Client<Nigiri, ark_bdk_wallet::Wallet<InMemoryDb>> {
+) -> Client<Nigiri, Wallet<InMemoryDb>> {
     let mut rng = thread_rng();
 
     let sk = SecretKey::new(&mut rng);
     let kp = Keypair::from_secret_key(&secp, &sk);
 
     let db = InMemoryDb::default();
-    let wallet =
-        ark_bdk_wallet::Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db)
-            .unwrap();
+    let wallet = Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db).unwrap();
     let wallet = Arc::new(wallet);
 
     OfflineClient::new(
@@ -280,6 +280,36 @@ pub async fn set_up_client(
     .connect()
     .await
     .unwrap()
+}
+
+#[allow(unused)]
+pub async fn wait_until_balance(
+    client: &Client<Nigiri, Wallet<InMemoryDb>>,
+    confirmed_target: Amount,
+    pending_target: Amount,
+) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let offchain_balance = client.offchain_balance().await.unwrap();
+
+            tracing::debug!(
+                ?offchain_balance,
+                %confirmed_target,
+                %pending_target,
+                "Waiting for balance to match targets"
+            );
+
+            if offchain_balance.confirmed() == confirmed_target
+                && offchain_balance.pending() == pending_target
+            {
+                return;
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 pub fn init_tracing() {

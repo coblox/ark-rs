@@ -108,6 +108,14 @@ impl BoardingOutput {
         self.exit_delay
     }
 
+    pub fn output_key(&self) -> bitcoin::key::TweakedPublicKey {
+        self.spend_info.output_key()
+    }
+
+    pub fn to_ark_address(&self, network: Network, server: XOnlyPublicKey) -> crate::ArkAddress {
+        crate::ArkAddress::new(network, server, self.output_key())
+    }
+
     pub fn exit_delay_duration(&self) -> Duration {
         let exit_delay = self
             .exit_delay

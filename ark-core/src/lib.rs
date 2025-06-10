@@ -8,7 +8,6 @@ pub mod proof_of_funds;
 pub mod redeem;
 pub mod round;
 pub mod server;
-pub mod tx_weight_estimator;
 pub mod unilateral_exit;
 pub mod vtxo;
 
