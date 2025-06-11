@@ -86,15 +86,35 @@ async fn main() -> Result<()> {
     // We need VTXOs as inputs to the DLC, because we must be able to presign several transactions
     // on top of the DLC. That is, we can't build the DLC protocol on top of a boarding output!
 
-    let alice_virtual_tx_input =
-        fund_vtxo(&esplora_client, &grpc_client, &server_info, &alice_kp).await?;
+    let alice_fund_amount = Amount::from_sat(100_000_000);
+    let alice_virtual_tx_input = fund_vtxo(
+        &esplora_client,
+        &grpc_client,
+        &server_info,
+        &alice_kp,
+        alice_fund_amount,
+    )
+    .await?;
 
-    let bob_virtual_tx_input =
-        fund_vtxo(&esplora_client, &grpc_client, &server_info, &bob_kp).await?;
+    let bob_fund_amount = Amount::from_sat(100_000_000);
+    let bob_virtual_tx_input = fund_vtxo(
+        &esplora_client,
+        &grpc_client,
+        &server_info,
+        &bob_kp,
+        bob_fund_amount,
+    )
+    .await?;
 
-    // A path that lets Alice reclaim (with the server's help) her funds some time after the oracle
-    // attests to the outcome of a relevant event, but _before_ the round ends. Thus, choosing the
-    // timelock correctly is very important.
+    // Using Musig2, the server is not even aware that this is a shared VTXO.
+    let musig_key_agg_cache =
+        MusigKeyAggCache::new(&zkp, &[to_zkp_pk(alice_pk), to_zkp_pk(bob_pk)]);
+    let shared_pk = musig_key_agg_cache.agg_pk();
+    let shared_pk = from_zkp_xonly(shared_pk);
+
+    // A path that lets Alice and Bob reclaim (with the server's help) their funds, some time after
+    // the oracle attests to the outcome of a relevant event, but _before_ the round ends. Thus,
+    // choosing the timelock correctly is very important.
     //
     // We don't use this path in this example, but including it in the Tapscript demonstrates that
     // the server accepts it.
@@ -103,23 +123,16 @@ async fn main() -> Result<()> {
         .push_int(refund_locktime.to_consensus_u32() as i64)
         .push_opcode(OP_CLTV)
         .push_opcode(OP_DROP)
-        .push_x_only_key(&alice_xonly_pk)
+        .push_x_only_key(&shared_pk)
         .push_opcode(OP_CHECKSIGVERIFY)
         .push_x_only_key(&server_pk)
         .push_opcode(OP_CHECKSIG)
         .into_script();
 
-    // Using Musig2, the server is not even aware that this is a shared VTXO.
-    let musig_key_agg_cache =
-        MusigKeyAggCache::new(&zkp, &[to_zkp_pk(alice_pk), to_zkp_pk(bob_pk)]);
-    let shared_pk = musig_key_agg_cache.agg_pk();
-    let shared_pk = from_zkp_xonly(shared_pk);
-
     let dlc_vtxo = Vtxo::new(
         &secp,
         server_info.pk.x_only_public_key().0,
         shared_pk,
-        // We may want/need to add more paths, this is just an example.
         vec![dlc_refund_script],
         server_info.unilateral_exit_delay,
         server_info.network,
@@ -128,7 +141,10 @@ async fn main() -> Result<()> {
     // We build the DLC funding transaction, but we don't "broadcast" it yet. We use it as a
     // reference point to build the rest of the DLC.
     let mut dlc_funding_redeem_psbt = build_redeem_transaction(
-        &[(&dlc_vtxo.to_ark_address(), Amount::from_sat(200_000_000))],
+        &[(
+            &dlc_vtxo.to_ark_address(),
+            alice_fund_amount + bob_fund_amount,
+        )],
         None,
         &[alice_virtual_tx_input.clone(), bob_virtual_tx_input.clone()],
     )
@@ -160,6 +176,19 @@ async fn main() -> Result<()> {
 
     let dlc_vtxo_input = redeem::VtxoInput::new(dlc_vtxo, dlc_output.value, dlc_outpoint);
 
+    // We build a refund transaction spending from the DLC VTXO.
+    let alice_refund_payout = alice_fund_amount;
+    let bob_refund_payout = bob_fund_amount;
+    let refund_redeem_psbt = build_redeem_transaction(
+        &[
+            (&alice_payout_vtxo.to_ark_address(), alice_refund_payout),
+            (&bob_payout_vtxo.to_ark_address(), bob_refund_payout),
+        ],
+        None,
+        &[dlc_vtxo_input.clone()],
+    )
+    .context("building refund TX")?;
+
     // We build CETs spending from the DLC VTXO.
     let alice_heads_payout = Amount::from_sat(70_000_000);
     let bob_heads_payout = dlc_output.value - alice_heads_payout;
@@ -185,7 +214,18 @@ async fn main() -> Result<()> {
     )
     .context("building tails CET")?;
 
-    // First, Alice and Bob sign the coin flip CETs.
+    // First, Alice and Bob sign the refund TX.
+
+    let refund_redeem_psbt = sign_refund_redeem_tx(
+        refund_redeem_psbt.clone(),
+        &alice_kp,
+        &bob_kp,
+        &musig_key_agg_cache,
+        &dlc_vtxo_input,
+    )
+    .context("signing heads CET")?;
+
+    // Then, Alice and Bob sign the coin flip CETs.
 
     // The oracle announces the next coin flip.
     let (event, nonce_pk) = oracle.announce();
@@ -255,6 +295,15 @@ async fn main() -> Result<()> {
         .submit_redeem_transaction(dlc_funding_redeem_psbt)
         .await
         .context("submitting funding TX")?;
+
+    if true {
+        grpc_client
+            .submit_redeem_transaction(refund_redeem_psbt)
+            .await
+            .context("submitting refund TX")?;
+
+        return Ok(());
+    }
 
     // Wait until the oracle attests to the outcome of the relevant event.
 
@@ -364,6 +413,7 @@ async fn fund_vtxo(
     grpc_client: &ark_grpc::Client,
     server_info: &server::Info,
     kp: &Keypair,
+    amount: Amount,
 ) -> Result<redeem::VtxoInput> {
     let secp = Secp256k1::new();
 
@@ -377,7 +427,7 @@ async fn fund_vtxo(
         server_info.network,
     )?;
 
-    faucet_fund(boarding_output.address(), Amount::ONE_BTC).await?;
+    faucet_fund(boarding_output.address(), amount).await?;
 
     let boarding_outpoints = list_boarding_outpoints(
         |address: &bitcoin::Address| -> Result<Vec<ExplorerUtxo>, ark_core::Error> {
@@ -385,7 +435,7 @@ async fn fund_vtxo(
         },
         &[boarding_output],
     )?;
-    assert_eq!(boarding_outpoints.spendable_balance(), Amount::ONE_BTC);
+    assert_eq!(boarding_outpoints.spendable_balance(), amount);
 
     let vtxo = Vtxo::new_default(
         &secp,
@@ -421,6 +471,95 @@ async fn fund_vtxo(
     );
 
     Ok(vtxo_input)
+}
+
+/// Sign a refund redeem transaction.
+///
+/// This function represents a session between the two signing parties. It would normally be
+/// performed over the internet.
+fn sign_refund_redeem_tx(
+    mut refund_redeem_psbt: Psbt,
+    alice_kp: &Keypair,
+    bob_kp: &Keypair,
+    musig_key_agg_cache: &MusigKeyAggCache,
+    dlc_vtxo_input: &redeem::VtxoInput,
+) -> Result<Psbt> {
+    let zkp = zkp::Secp256k1::new();
+    let mut rng = thread_rng();
+
+    let shared_pk = from_zkp_xonly(musig_key_agg_cache.agg_pk());
+
+    let alice_pk = alice_kp.public_key();
+
+    let (alice_musig_nonce, alice_musig_pub_nonce) = {
+        let session_id = MusigSessionId::new(&mut rng);
+        let extra_rand = rng.gen();
+        new_musig_nonce_pair(
+            &zkp,
+            session_id,
+            None,
+            None,
+            to_zkp_pk(alice_pk),
+            None,
+            Some(extra_rand),
+        )?
+    };
+
+    let bob_pk = bob_kp.public_key();
+
+    let (bob_musig_nonce, bob_musig_pub_nonce) = {
+        let session_id = MusigSessionId::new(&mut rng);
+        let extra_rand = rng.gen();
+        new_musig_nonce_pair(
+            &zkp,
+            session_id,
+            None,
+            None,
+            to_zkp_pk(bob_pk),
+            None,
+            Some(extra_rand),
+        )?
+    };
+
+    let sign_refund_fn =
+        |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
+            let musig_agg_nonce =
+                MusigAggNonce::new(&zkp, &[alice_musig_pub_nonce, bob_musig_pub_nonce]);
+            let msg =
+                zkp::Message::from_digest_slice(msg.as_ref()).map_err(ark_core::Error::ad_hoc)?;
+
+            let musig_session = MusigSession::new(&zkp, musig_key_agg_cache, musig_agg_nonce, msg);
+
+            let alice_kp = zkp::Keypair::from_seckey_slice(&zkp, &alice_kp.secret_bytes())
+                .expect("valid keypair");
+
+            let alice_sig = musig_session
+                .partial_sign(&zkp, alice_musig_nonce, &alice_kp, musig_key_agg_cache)
+                .map_err(ark_core::Error::ad_hoc)?;
+
+            let bob_kp = zkp::Keypair::from_seckey_slice(&zkp, &bob_kp.secret_bytes())
+                .expect("valid keypair");
+
+            let bob_sig = musig_session
+                .partial_sign(&zkp, bob_musig_nonce, &bob_kp, musig_key_agg_cache)
+                .map_err(ark_core::Error::ad_hoc)?;
+
+            let sig = musig_session.partial_sig_agg(&[alice_sig, bob_sig]);
+            let sig =
+                schnorr::Signature::from_slice(sig.as_ref()).map_err(ark_core::Error::ad_hoc)?;
+
+            Ok((sig, shared_pk))
+        };
+
+    sign_redeem_transaction(
+        sign_refund_fn,
+        &mut refund_redeem_psbt,
+        &[dlc_vtxo_input.clone()],
+        0,
+    )
+    .context("signing refund TX")?;
+
+    Ok(refund_redeem_psbt)
 }
 
 /// Sign a CET redeem transaction.
