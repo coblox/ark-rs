@@ -1,5 +1,6 @@
 use crate::error::ErrorContext;
 use crate::wallet::BoardingWallet;
+use crate::wallet::CoinSelectionResult;
 use crate::wallet::OnchainWallet;
 use ark_core::generate_incoming_vtxo_transaction_history;
 use ark_core::generate_outgoing_vtxo_transaction_history;
@@ -616,40 +617,18 @@ where
         let package_size = child_vsize + compute_vsize(parent);
 
         let fee_rate = self.blockchain().get_fee_rate().await?;
-        let fees = Amount::from_sat((package_size as f64 * fee_rate).ceil() as u64);
+        let fee = Amount::from_sat((package_size as f64 * fee_rate).ceil() as u64);
 
         // Get wallet addresses for coin selection
-        let addresses = self.get_onchain_addresses().await?;
+        let CoinSelectionResult {
+            selected_utxos,
+            total_selected,
+            change_amount,
+        } = self.inner.wallet.select_coins(fee)?;
 
-        let mut selected_coins = Vec::new();
-        let mut selected_amount = Amount::ZERO;
-        let amount_to_select = fees; // Anchor has 0 value
-
-        for address in addresses {
-            let utxos = self.blockchain().find_outpoints(&address).await?;
-
-            for utxo in utxos {
-                if !utxo.is_spent {
-                    selected_coins.push((address.clone(), utxo));
-                    selected_amount += utxo.amount;
-                    if selected_amount >= amount_to_select {
-                        break;
-                    }
-                }
-            }
-            if selected_amount >= amount_to_select {
-                break;
-            }
+        if total_selected < fee {
+            return Err(Error::ad_hoc(format!("not enough funds to select {fee}")));
         }
-
-        if selected_amount < amount_to_select {
-            return Err(Error::ad_hoc(format!(
-                "not enough funds to select {} sats",
-                amount_to_select.to_sat()
-            )));
-        }
-
-        let change_amount = selected_amount - fees;
 
         // Get a new address for change
         let new_addr = self.inner.wallet.get_onchain_address()?;
@@ -658,8 +637,8 @@ where
         let mut inputs = vec![anchor];
         let mut sequences = vec![Sequence::MAX];
 
-        for utxo in &selected_coins {
-            inputs.push(utxo.1.outpoint);
+        for utxo in selected_utxos.iter() {
+            inputs.push(utxo.outpoint);
             sequences.push(Sequence::MAX);
         }
 
@@ -692,8 +671,8 @@ where
 
         for i in 1..psbt.inputs.len() {
             psbt.inputs[i].witness_utxo = Some(TxOut {
-                value: selected_coins[i - 1].1.amount,
-                script_pubkey: selected_coins[i - 1].0.script_pubkey(),
+                value: selected_utxos[i - 1].amount,
+                script_pubkey: selected_utxos[i - 1].address.script_pubkey(),
             });
         }
 
@@ -706,11 +685,6 @@ where
         let tx = psbt.extract_tx().map_err(Error::ad_hoc)?;
 
         Ok(tx)
-    }
-
-    async fn get_onchain_addresses(&self) -> Result<Vec<Address>, Error> {
-        // Return onchain addresses from wallet
-        Ok(vec![self.inner.wallet.get_onchain_address()?])
     }
 }
 

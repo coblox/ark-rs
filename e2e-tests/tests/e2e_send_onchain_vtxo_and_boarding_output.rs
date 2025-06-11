@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use crate::common::wait_until_balance;
+use ark_client::wallet::OnchainWallet;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::key::Secp256k1;
 use bitcoin::Amount;
@@ -23,7 +24,8 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     let secp = Secp256k1::new();
     let mut rng = thread_rng();
 
-    let alice = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
+    let (alice, alice_wallet) =
+        set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
 
     let offchain_balance = alice.offchain_balance().await.unwrap();
 
@@ -53,6 +55,7 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
 
     // Ensure that the round TX is mined.
     nigiri.mine(1).await;
+    alice_wallet.sync().await.unwrap();
 
     alice.commit_vtxos_on_chain().await.unwrap();
 

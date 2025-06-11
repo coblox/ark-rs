@@ -20,8 +20,8 @@ pub async fn e2e() {
     let secp = Secp256k1::new();
     let mut rng = thread_rng();
 
-    let alice = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
-    let bob = set_up_client("bob".to_string(), nigiri.clone(), secp).await;
+    let (alice, _) = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
+    let (bob, _) = set_up_client("bob".to_string(), nigiri.clone(), secp).await;
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
     let bob_offchain_balance = bob.offchain_balance().await.unwrap();

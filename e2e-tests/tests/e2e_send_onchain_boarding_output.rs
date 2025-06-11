@@ -20,7 +20,7 @@ pub async fn send_onchain_boarding_output() {
 
     let secp = Secp256k1::new();
 
-    let alice = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
+    let (alice, _) = set_up_client("alice".to_string(), nigiri.clone(), secp.clone()).await;
 
     // To be able to spend a boarding output it needs to have been confirmed for at least
     // `boarding_exit_delay` seconds.

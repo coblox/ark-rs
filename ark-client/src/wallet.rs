@@ -7,6 +7,7 @@ use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::FeeRate;
 use bitcoin::Network;
+use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::XOnlyPublicKey;
 
@@ -21,6 +22,20 @@ pub trait BoardingWallet {
     fn get_boarding_outputs(&self) -> Result<Vec<BoardingOutput>, Error>;
 
     fn sign_for_pk(&self, pk: &XOnlyPublicKey, msg: &Message) -> Result<Signature, Error>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedUtxo {
+    pub outpoint: OutPoint,
+    pub amount: Amount,
+    pub address: Address,
+}
+
+#[derive(Debug, Clone)]
+pub struct CoinSelectionResult {
+    pub selected_utxos: Vec<SelectedUtxo>,
+    pub total_selected: Amount,
+    pub change_amount: Amount,
 }
 
 pub trait OnchainWallet {
@@ -38,6 +53,8 @@ pub trait OnchainWallet {
     ) -> Result<Psbt, Error>;
 
     fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error>;
+
+    fn select_coins(&self, target_amount: Amount) -> Result<CoinSelectionResult, Error>;
 }
 
 pub trait Persistence {

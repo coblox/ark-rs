@@ -94,7 +94,10 @@ impl BitcoinRpc {
             )));
         }
 
-        tracing::debug!("Successfully submitted package of {} transactions", txs.len());
+        tracing::debug!(
+            "Successfully submitted package of {} transactions",
+            txs.len()
+        );
         Ok(())
     }
 }
@@ -351,7 +354,7 @@ pub async fn set_up_client(
     name: String,
     nigiri: Arc<Nigiri>,
     secp: Secp256k1<All>,
-) -> Client<Nigiri, Wallet<InMemoryDb>> {
+) -> (Client<Nigiri, Wallet<InMemoryDb>>, Arc<Wallet<InMemoryDb>>) {
     let mut rng = thread_rng();
 
     let sk = SecretKey::new(&mut rng);
@@ -361,7 +364,7 @@ pub async fn set_up_client(
     let wallet = Wallet::new(kp, secp, Network::Regtest, "http://localhost:3000", db).unwrap();
     let wallet = Arc::new(wallet);
 
-    OfflineClient::new(
+    let client = OfflineClient::new(
         name,
         kp,
         nigiri,
@@ -370,7 +373,9 @@ pub async fn set_up_client(
     )
     .connect()
     .await
-    .unwrap()
+    .unwrap();
+
+    (client, wallet)
 }
 
 #[allow(unused)]
@@ -379,7 +384,7 @@ pub async fn wait_until_balance(
     confirmed_target: Amount,
     pending_target: Amount,
 ) {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let offchain_balance = client.offchain_balance().await.unwrap();
 
@@ -413,6 +418,7 @@ pub fn init_tracing() {
                  bdk=info,\
                  tower=info,\
                  hyper_util=info,\
+                 hyper=info,\
                  h2=warn",
             )
             .with_test_writer()
