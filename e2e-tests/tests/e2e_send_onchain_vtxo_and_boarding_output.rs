@@ -57,6 +57,15 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     nigiri.mine(1).await;
     alice_wallet.sync().await.unwrap();
 
+    let (alice_offchain_address, _) = alice.get_offchain_address().unwrap();
+
+    alice
+        .send_vtxo(alice_offchain_address, Amount::from_sat(100_000))
+        .await
+        .unwrap();
+
+    wait_until_balance(&alice, Amount::ZERO, fund_amount).await;
+
     alice.commit_vtxos_on_chain().await.unwrap();
 
     // Get one confirmation on the VTXO.
