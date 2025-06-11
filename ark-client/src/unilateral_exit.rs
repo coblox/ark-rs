@@ -83,10 +83,6 @@ where
             if is_not_published {
                 let child_tx = self.bump_anchor_tx(parent_tx).await?;
 
-                dbg!(&parent_tx);
-
-                dbg!(&child_tx);
-
                 tracing::info!(
                     %txid,
                     bump_txid = %child_tx.compute_txid(),

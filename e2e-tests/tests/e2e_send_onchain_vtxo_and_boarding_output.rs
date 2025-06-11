@@ -40,12 +40,9 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     // We give Alice an extra UTXO to be able to bump the one transaction she needs to broadcast to
     // commit her VTXO onchain.
     let alice_onchain_address = alice.get_onchain_address().unwrap();
-    let utxo = nigiri
+    nigiri
         .faucet_fund(&alice_onchain_address, fund_amount)
         .await;
-
-    dbg!(alice_onchain_address);
-    dbg!(utxo);
 
     let offchain_balance = alice.offchain_balance().await.unwrap();
 
@@ -53,6 +50,9 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
 
     alice.board(&mut rng).await.unwrap();
     wait_until_balance(&alice, fund_amount, Amount::ZERO).await;
+
+    // Ensure that the round TX is mined.
+    nigiri.mine(1).await;
 
     alice.commit_vtxos_on_chain().await.unwrap();
 

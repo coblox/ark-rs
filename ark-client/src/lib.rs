@@ -697,14 +697,10 @@ where
             });
         }
 
-        dbg!(&psbt);
-
         self.inner
             .wallet
             .sign(&mut psbt)
             .context("failed to sign bump TX")?;
-
-        dbg!("after signing", &psbt);
 
         // Extract transaction
         let tx = psbt.extract_tx().map_err(Error::ad_hoc)?;
