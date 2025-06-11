@@ -81,8 +81,17 @@ where
 
             let is_not_published = blockchain.find_tx(&txid).await?.is_none();
             if is_not_published {
-                tracing::info!(%txid, "Broadcasting VTXO transaction and bumped transaction");
                 let child_tx = self.bump_anchor_tx(parent_tx).await?;
+
+                dbg!(&parent_tx);
+
+                dbg!(&child_tx);
+
+                tracing::info!(
+                    %txid,
+                    bump_txid = %child_tx.compute_txid(),
+                    "Broadcasting unilateral exit TX"
+                );
 
                 let broadcast =
                     || async { blockchain.broadcast_package(&[parent_tx, &child_tx]).await };
@@ -99,7 +108,13 @@ where
                     .await
                     .with_context(|| format!("Failed to broadcast VTXO transaction {txid}"))?;
 
-                tracing::info!(%txid, i, total_txs = off_board_txs_len, "Broadcasted VTXO transaction");
+                tracing::info!(
+                    %txid,
+                    bump_txid = %child_tx.compute_txid(),
+                    %i,
+                    total_txs = off_board_txs_len,
+                    "Broadcasted VTXO transaction"
+                );
             }
         }
 

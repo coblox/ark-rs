@@ -39,28 +39,25 @@ pub struct Nigiri {
     /// This can be used to ensure that certain outpoints are considered spendable, which is useful
     /// for testing scripts with opcodes such as `OP_CSV`.
     outpoint_blocktime_offset: RwLock<u64>,
-    /// Bitcoin Core RPC client for package submission
-    rpc_client: reqwest::Client,
-    /// Bitcoin Core RPC URL
-    rpc_url: String,
-    /// Bitcoin Core RPC username
-    rpc_username: String,
-    /// Bitcoin Core RPC password
-    rpc_password: String,
+    /// Reqwest client for Esplora package submission
+    reqwest_client: reqwest::Client,
+    /// Chopsticks URL for TX package submission. Needed until Esplora supports it.
+    chopsticks_url: String,
 }
 
 impl Nigiri {
     pub fn new() -> Self {
-        let builder = esplora_client::Builder::new("http://localhost:30000");
+        let esplora_url = "http://localhost:30000";
+        let chopsticks_url = "http://localhost:3000".to_string();
+
+        let builder = esplora_client::Builder::new(esplora_url);
         let esplora_client = builder.build_blocking();
 
         Self {
             esplora_client,
             outpoint_blocktime_offset: RwLock::new(0),
-            rpc_client: reqwest::Client::new(),
-            rpc_url: "http://localhost:18443".to_string(), // Default regtest port
-            rpc_username: "admin".to_string(),             // Default nigiri credentials
-            rpc_password: "admin".to_string(),
+            reqwest_client: reqwest::Client::new(),
+            chopsticks_url,
         }
     }
 
@@ -231,26 +228,20 @@ impl Blockchain for Nigiri {
     }
 
     async fn broadcast_package(&self, txs: &[&Transaction]) -> Result<(), Error> {
-        // Serialize transactions to hex strings
-        let tx_hexes = txs
+        let txs = txs
             .iter()
             .map(bitcoin::consensus::encode::serialize_hex)
             .collect::<Vec<_>>();
 
-        // Create RPC request
-        let rpc_request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "submitpackage",
-            "method": "submitpackage",
-            "params": [tx_hexes]
-        });
+        dbg!(&txs);
 
-        // Make RPC call
+        let package_url = format!("{}/txs/package", self.chopsticks_url);
+
         let response = self
-            .rpc_client
-            .post(&self.rpc_url)
-            .basic_auth(&self.rpc_username, Some(&self.rpc_password))
-            .json(&rpc_request)
+            .reqwest_client
+            .post(&package_url)
+            .header("Content-Type", "application/json")
+            .json(&txs)
             .send()
             .await
             .unwrap();
@@ -259,17 +250,10 @@ impl Blockchain for Nigiri {
         let response_text = response.text().await.unwrap();
 
         if !status.is_success() {
-            panic!("RPC call failed with status {}: {}", status, response_text);
-        }
-
-        // Parse response
-        let rpc_response: serde_json::Value = serde_json::from_str(&response_text).unwrap();
-
-        // Check for RPC errors
-        if let Some(error) = rpc_response.get("error") {
-            if !error.is_null() {
-                panic!("RPC error: {}", error);
-            }
+            panic!(
+                "Package submission failed with status {}: {}",
+                status, response_text
+            );
         }
 
         tracing::debug!(

@@ -1,3 +1,4 @@
+use crate::error::ErrorContext;
 use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use ark_core::generate_incoming_vtxo_transaction_history;
@@ -23,6 +24,7 @@ use bitcoin::TxIn;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::Weight;
+use bitcoin::Witness;
 use futures::Future;
 use jiff::Timestamp;
 use std::sync::Arc;
@@ -628,7 +630,7 @@ where
 
             for utxo in utxos {
                 if !utxo.is_spent {
-                    selected_coins.push(utxo);
+                    selected_coins.push((address.clone(), utxo));
                     selected_amount += utxo.amount;
                     if selected_amount >= amount_to_select {
                         break;
@@ -657,7 +659,7 @@ where
         let mut sequences = vec![Sequence::MAX];
 
         for utxo in &selected_coins {
-            inputs.push(utxo.outpoint);
+            inputs.push(utxo.1.outpoint);
             sequences.push(Sequence::MAX);
         }
 
@@ -668,7 +670,7 @@ where
 
         // Create PSBT
         let mut psbt = Psbt::from_unsigned_tx(Transaction {
-            version: bitcoin::transaction::Version::TWO,
+            version: bitcoin::transaction::Version::non_standard(3),
             lock_time: bitcoin::absolute::LockTime::ZERO,
             input: inputs
                 .iter()
@@ -677,7 +679,7 @@ where
                     previous_output: *outpoint,
                     script_sig: bitcoin::ScriptBuf::new(),
                     sequence: *sequence,
-                    witness: bitcoin::Witness::new(),
+                    witness: Witness::new(),
                 })
                 .collect(),
             output: outputs,
@@ -686,27 +688,27 @@ where
 
         // Set witness UTXO for anchor input (first input)
         psbt.inputs[0].witness_utxo = Some(anchor_output());
+        psbt.inputs[0].final_script_witness = Some(Witness::new());
 
-        // Sign the transaction
-        self.inner.wallet.sign(&mut psbt)?;
-
-        // Finalize all inputs except the first (anchor input)
         for i in 1..psbt.inputs.len() {
-            psbt.inputs[i].final_script_witness =
-                psbt.inputs[i].partial_sigs.values().next().map(|sig| {
-                    let mut witness = bitcoin::Witness::new();
-                    witness.push(sig.to_vec());
-                    witness
-                });
+            psbt.inputs[i].witness_utxo = Some(TxOut {
+                value: selected_coins[i - 1].1.amount,
+                script_pubkey: selected_coins[i - 1].0.script_pubkey(),
+            });
         }
 
-        // Extract transaction
-        dbg!("here?");
-        let tx = psbt.extract_tx().map_err(Error::ad_hoc)?;
-        dbg!("bar");
+        dbg!(&psbt);
 
-        let string = bitcoin::consensus::encode::serialize_hex(&tx);
-        dbg!(string);
+        self.inner
+            .wallet
+            .sign(&mut psbt)
+            .context("failed to sign bump TX")?;
+
+        dbg!("after signing", &psbt);
+
+        // Extract transaction
+        let tx = psbt.extract_tx().map_err(Error::ad_hoc)?;
+
         Ok(tx)
     }
 

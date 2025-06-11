@@ -167,7 +167,6 @@ where
     fn sign(&self, psbt: &mut Psbt) -> Result<bool, Error> {
         let options = SignOptions {
             trust_witness_utxo: true,
-
             ..SignOptions::default()
         };
 
