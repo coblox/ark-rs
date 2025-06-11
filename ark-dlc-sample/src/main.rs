@@ -54,6 +54,8 @@ use zkp::musig::MusigKeyAggCache;
 use zkp::musig::MusigSession;
 use zkp::musig::MusigSessionId;
 
+const RUN_REFUND_SCENARIO: bool = false;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
@@ -296,11 +298,34 @@ async fn main() -> Result<()> {
         .await
         .context("submitting funding TX")?;
 
-    if true {
+    if RUN_REFUND_SCENARIO {
         grpc_client
             .submit_redeem_transaction(refund_redeem_psbt)
             .await
             .context("submitting refund TX")?;
+
+        {
+            let spendable_vtxos = spendable_vtxos(&grpc_client, &[alice_payout_vtxo]).await?;
+            let virtual_tx_outpoints = list_virtual_tx_outpoints(
+                |address: &bitcoin::Address| -> Result<Vec<ExplorerUtxo>, ark_core::Error> {
+                    find_outpoints(tokio::runtime::Handle::current(), &esplora_client, address)
+                },
+                spendable_vtxos,
+            )?;
+
+            assert_eq!(virtual_tx_outpoints.spendable_balance(), alice_fund_amount);
+        }
+        {
+            let spendable_vtxos = spendable_vtxos(&grpc_client, &[bob_payout_vtxo]).await?;
+            let virtual_tx_outpoints = list_virtual_tx_outpoints(
+                |address: &bitcoin::Address| -> Result<Vec<ExplorerUtxo>, ark_core::Error> {
+                    find_outpoints(tokio::runtime::Handle::current(), &esplora_client, address)
+                },
+                spendable_vtxos,
+            )?;
+
+            assert_eq!(virtual_tx_outpoints.spendable_balance(), bob_fund_amount);
+        }
 
         return Ok(());
     }
