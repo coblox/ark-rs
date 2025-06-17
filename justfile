@@ -144,10 +144,6 @@ arkd-wallet-run:
 
     make run-bitcoind -C $ARKD_WALLET_DIR run &> {{ arkd_wallet_logs }} &
 
-    just arkd-wallet-init
-
-    echo "Arkd wallet started. Find the logs in {{ arkd_wallet_logs }}"
-
 # Start `arkd` binary.
 arkd-run:
     #!/usr/bin/env bash

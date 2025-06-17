@@ -88,6 +88,7 @@ async fn main() -> Result<()> {
     // We need VTXOs as inputs to the DLC, because we must be able to presign several transactions
     // on top of the DLC. That is, we can't build the DLC protocol on top of a boarding output!
 
+    //// DEMO: Step: Funding and joining a round
     let alice_fund_amount = Amount::from_sat(100_000_000);
     let alice_virtual_tx_input = fund_vtxo(
         &esplora_client,
@@ -97,6 +98,31 @@ async fn main() -> Result<()> {
         alice_fund_amount,
     )
     .await?;
+
+    {
+        let spendable_vtxos = spendable_vtxos(
+            &grpc_client,
+            &[Vtxo::new(
+                &secp,
+                server_info.pk.x_only_public_key().0,
+                alice_xonly_pk,
+                vec![],
+                server_info.unilateral_exit_delay,
+                server_info.network,
+            )
+            .unwrap()],
+        )
+        .await?;
+        let virtual_tx_outpoints = list_virtual_tx_outpoints(
+            |address: &bitcoin::Address| -> Result<Vec<ExplorerUtxo>, ark_core::Error> {
+                find_outpoints(tokio::runtime::Handle::current(), &esplora_client, address)
+            },
+            spendable_vtxos,
+        )?;
+
+        assert_eq!(virtual_tx_outpoints.spendable_balance(), alice_fund_amount);
+        tracing::info!(amount = ?alice_fund_amount, "Alice funding amount");
+    }
 
     let bob_fund_amount = Amount::from_sat(100_000_000);
     let bob_virtual_tx_input = fund_vtxo(
@@ -108,12 +134,39 @@ async fn main() -> Result<()> {
     )
     .await?;
 
+    {
+        let spendable_vtxos = spendable_vtxos(
+            &grpc_client,
+            &[Vtxo::new(
+                &secp,
+                server_info.pk.x_only_public_key().0,
+                bob_xonly_pk,
+                vec![],
+                server_info.unilateral_exit_delay,
+                server_info.network,
+            )
+            .unwrap()],
+        )
+        .await?;
+        let virtual_tx_outpoints = list_virtual_tx_outpoints(
+            |address: &bitcoin::Address| -> Result<Vec<ExplorerUtxo>, ark_core::Error> {
+                find_outpoints(tokio::runtime::Handle::current(), &esplora_client, address)
+            },
+            spendable_vtxos,
+        )?;
+
+        assert_eq!(virtual_tx_outpoints.spendable_balance(), bob_fund_amount);
+        tracing::info!(amount = ?bob_fund_amount, "Bob funding amount");
+    }
+
+    //// DEMO: Step: Create DLC output multisig between Alice and Bob
     // Using Musig2, the server is not even aware that this is a shared VTXO.
     let musig_key_agg_cache =
         MusigKeyAggCache::new(&zkp, &[to_zkp_pk(alice_pk), to_zkp_pk(bob_pk)]);
     let shared_pk = musig_key_agg_cache.agg_pk();
     let shared_pk = from_zkp_xonly(shared_pk);
 
+    //// DEMO: Step: Create refund path to get funds back if Oracle does not attest
     // A path that lets Alice and Bob reclaim (with the server's help) their funds, some time after
     // the oracle attests to the outcome of a relevant event, but _before_ the round ends. Thus,
     // choosing the timelock correctly is very important.
@@ -140,12 +193,13 @@ async fn main() -> Result<()> {
         server_info.network,
     )?;
 
+    //// DEMO: Step: Create DLC funding transaction
     // We build the DLC funding transaction, but we don't "broadcast" it yet. We use it as a
     // reference point to build the rest of the DLC.
     let mut dlc_funding_redeem_psbt = build_redeem_transaction(
         &[(
             &dlc_vtxo.to_ark_address(),
-            alice_fund_amount + bob_fund_amount,
+            bob_fund_amount + bob_fund_amount,
         )],
         None,
         &[alice_virtual_tx_input.clone(), bob_virtual_tx_input.clone()],
@@ -179,7 +233,7 @@ async fn main() -> Result<()> {
     let dlc_vtxo_input = redeem::VtxoInput::new(dlc_vtxo, dlc_output.value, dlc_outpoint);
 
     // We build a refund transaction spending from the DLC VTXO.
-    let alice_refund_payout = alice_fund_amount;
+    let alice_refund_payout = bob_fund_amount;
     let bob_refund_payout = bob_fund_amount;
     let refund_redeem_psbt = build_redeem_transaction(
         &[
@@ -191,6 +245,7 @@ async fn main() -> Result<()> {
     )
     .context("building refund TX")?;
 
+    //// DEMO: Step: Create CETs
     // We build CETs spending from the DLC VTXO.
     let alice_heads_payout = Amount::from_sat(70_000_000);
     let bob_heads_payout = dlc_output.value - alice_heads_payout;
@@ -216,8 +271,8 @@ async fn main() -> Result<()> {
     )
     .context("building tails CET")?;
 
+    //// DEMO: Step: Signing procedure for refund
     // First, Alice and Bob sign the refund TX.
-
     let refund_redeem_psbt = sign_refund_redeem_tx(
         refund_redeem_psbt.clone(),
         &alice_kp,
@@ -227,8 +282,10 @@ async fn main() -> Result<()> {
     )
     .context("signing heads CET")?;
 
+    //// DEMO: Step: Signing procedure for CETs
     // Then, Alice and Bob sign the coin flip CETs.
 
+    //// DEMO: Step: We need oracles pk for the event
     // The oracle announces the next coin flip.
     let (event, nonce_pk) = oracle.announce();
 
@@ -242,6 +299,8 @@ async fn main() -> Result<()> {
 
         (heads_adaptor_pk, tails_adaptor_pk)
     };
+
+    //// DEMO: Step: Sign the CETs
 
     // Both parties end up with a copy of every CET (one per outcome). The transactions cannot yet
     // be published because the adaptor signatures need to be completed with the oracle's adaptor.
@@ -265,6 +324,8 @@ async fn main() -> Result<()> {
         &dlc_vtxo_input,
     )
     .context("signing tails CET")?;
+
+    //// DEMO: Step: Sign the funding transaction
 
     // Finally, Alice and Bob sign the DLC funding transaction.
 
@@ -292,6 +353,7 @@ async fn main() -> Result<()> {
     )
     .context("Bob signing funding TX")?;
 
+    //// DEMO: Step: Send funding transaction to Ark Operator - The bet is on
     // Submit DLC funding transaction.
     grpc_client
         .submit_redeem_transaction(dlc_funding_redeem_psbt)
@@ -313,7 +375,7 @@ async fn main() -> Result<()> {
                 spendable_vtxos,
             )?;
 
-            assert_eq!(virtual_tx_outpoints.spendable_balance(), alice_fund_amount);
+            assert_eq!(virtual_tx_outpoints.spendable_balance(), bob_fund_amount);
         }
         {
             let spendable_vtxos = spendable_vtxos(&grpc_client, &[bob_payout_vtxo]).await?;
@@ -330,6 +392,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    //// DEMO: Step: Wait for the oracle attestation
     // Wait until the oracle attests to the outcome of the relevant event.
 
     let is_heads = flip_coin();
@@ -379,15 +442,11 @@ async fn main() -> Result<()> {
         )?;
 
         if is_heads {
-            assert_eq!(
-                virtual_tx_outpoints.spendable_balance(),
-                Amount::from_sat(69_999_897)
-            );
+            assert_eq!(virtual_tx_outpoints.spendable_balance(), alice_heads_payout);
+            tracing::info!(amount = ?alice_heads_payout, "Alice won and received");
         } else {
-            assert_eq!(
-                virtual_tx_outpoints.spendable_balance(),
-                Amount::from_sat(24_999_897)
-            );
+            assert_eq!(virtual_tx_outpoints.spendable_balance(), alice_tails_payout);
+            tracing::info!(amount = ?alice_tails_payout, "Alice lost and received");
         }
     };
 
@@ -401,16 +460,14 @@ async fn main() -> Result<()> {
         )?;
 
         if is_heads {
-            assert_eq!(
-                virtual_tx_outpoints.spendable_balance(),
-                Amount::from_sat(129_999_617)
-            );
+            assert_eq!(virtual_tx_outpoints.spendable_balance(), bob_heads_payout);
+            tracing::info!(amount = ?bob_heads_payout, "Bob lost and received");
         } else {
-            assert_eq!(
-                virtual_tx_outpoints.spendable_balance(),
-                Amount::from_sat(174_999_617)
-            );
+            assert_eq!(virtual_tx_outpoints.spendable_balance(), bob_tails_payout);
+            tracing::info!(amount = ?bob_tails_payout, "Bob won and received");
         }
+
+        tracing::info!("It worked™️");
     };
 
     Ok(())
