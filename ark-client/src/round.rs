@@ -499,7 +499,6 @@ where
                             vtxo_inputs.as_slice(),
                             e.connector_tree,
                             &e.connectors_index,
-                            e.min_relay_fee_rate,
                             &server_info.forfeit_address,
                             server_info.dust,
                         )

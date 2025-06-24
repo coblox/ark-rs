@@ -13,12 +13,13 @@ pub mod vtxo;
 
 mod ark_address;
 mod error;
-mod forfeit_fee;
 mod history;
 mod internal_node;
 mod script;
 
 pub use ark_address::ArkAddress;
+use bitcoin::ScriptBuf;
+use bitcoin::TxOut;
 pub use boarding_output::BoardingOutput;
 pub use error::Error;
 pub use error::ErrorContext;
@@ -37,6 +38,8 @@ pub const UNSPENDABLE_KEY: &str =
 
 pub const VTXO_INPUT_INDEX: usize = 0;
 
+const ANCHOR_SCRIPT_PUBKEY: [u8; 4] = [0x51, 0x02, 0x4e, 0x73];
+
 /// Information a UTXO that may be extracted from an on-chain explorer.
 #[derive(Clone, Copy, Debug)]
 pub struct ExplorerUtxo {
@@ -44,4 +47,13 @@ pub struct ExplorerUtxo {
     pub amount: Amount,
     pub confirmation_blocktime: Option<u64>,
     pub is_spent: bool,
+}
+
+pub fn anchor_output() -> TxOut {
+    let script_pubkey = ScriptBuf::from_bytes(ANCHOR_SCRIPT_PUBKEY.to_vec());
+
+    TxOut {
+        value: Amount::ZERO,
+        script_pubkey,
+    }
 }

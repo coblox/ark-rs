@@ -140,6 +140,10 @@ impl Vtxo {
         self.owner
     }
 
+    pub fn server_pk(&self) -> XOnlyPublicKey {
+        self.server
+    }
+
     pub fn exit_delay(&self) -> bitcoin::Sequence {
         self.exit_delay
     }

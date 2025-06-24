@@ -43,7 +43,7 @@ where
         let network_client = &self.network_client();
         let mut unilateral_exit_trees = Vec::new();
 
-        // For reach spendable VTXO, generate its unilateral exit tree.
+        // For each spendable VTXO, generate its unilateral exit tree.
         for (virtual_tx_outpoints, _) in spendable_vtxos {
             for virtual_tx_outpoint in virtual_tx_outpoints {
                 let vtxo_chain_response = self
@@ -51,7 +51,12 @@ where
                     .get_vtxo_chain(Some(virtual_tx_outpoint.outpoint), None)
                     .await
                     .map_err(Error::ad_hoc)
-                    .context("failed to get VTXO chain")?;
+                    .with_context(|| {
+                        format!(
+                            "failed to get VTXO chain for outpoint {}",
+                            virtual_tx_outpoint.outpoint
+                        )
+                    })?;
 
                 let paths = build_unilateral_exit_tree_txids(
                     &vtxo_chain_response.chains,

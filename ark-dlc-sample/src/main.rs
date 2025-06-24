@@ -6,8 +6,10 @@ use ark_core::boarding_output::list_boarding_outpoints;
 use ark_core::boarding_output::BoardingOutpoints;
 use ark_core::proof_of_funds;
 use ark_core::redeem;
-use ark_core::redeem::build_redeem_transaction;
-use ark_core::redeem::sign_redeem_transaction;
+use ark_core::redeem::build_offchain_transactions;
+use ark_core::redeem::sign_checkpoint_transaction;
+use ark_core::redeem::sign_offchain_virtual_transaction;
+use ark_core::redeem::OffchainTransactions;
 use ark_core::round;
 use ark_core::round::create_and_sign_forfeit_txs;
 use ark_core::round::generate_nonce_tree;
@@ -89,7 +91,7 @@ async fn main() -> Result<()> {
     // on top of the DLC. That is, we can't build the DLC protocol on top of a boarding output!
 
     let alice_fund_amount = Amount::from_sat(100_000_000);
-    let alice_virtual_tx_input = fund_vtxo(
+    let alice_dlc_input = fund_vtxo(
         &esplora_client,
         &grpc_client,
         &server_info,
@@ -99,7 +101,7 @@ async fn main() -> Result<()> {
     .await?;
 
     let bob_fund_amount = Amount::from_sat(100_000_000);
-    let bob_virtual_tx_input = fund_vtxo(
+    let bob_dlc_input = fund_vtxo(
         &esplora_client,
         &grpc_client,
         &server_info,
@@ -142,19 +144,22 @@ async fn main() -> Result<()> {
 
     // We build the DLC funding transaction, but we don't "broadcast" it yet. We use it as a
     // reference point to build the rest of the DLC.
-    let mut dlc_funding_redeem_psbt = build_redeem_transaction(
+    let OffchainTransactions {
+        virtual_tx: mut dlc_virtual_tx,
+        checkpoint_txs: dlc_checkpoint_txs,
+    } = build_offchain_transactions(
         &[(
             &dlc_vtxo.to_ark_address(),
             alice_fund_amount + bob_fund_amount,
         )],
         None,
-        &[alice_virtual_tx_input.clone(), bob_virtual_tx_input.clone()],
+        &[alice_dlc_input.clone(), bob_dlc_input.clone()],
     )
     .context("building DLC TX")?;
 
-    let dlc_output = dlc_funding_redeem_psbt.unsigned_tx.output[0].clone();
+    let dlc_output = dlc_virtual_tx.unsigned_tx.output[0].clone();
     let dlc_outpoint = OutPoint {
-        txid: dlc_funding_redeem_psbt.unsigned_tx.compute_txid(),
+        txid: dlc_virtual_tx.unsigned_tx.compute_txid(),
         vout: 0,
     };
 
@@ -181,7 +186,7 @@ async fn main() -> Result<()> {
     // We build a refund transaction spending from the DLC VTXO.
     let alice_refund_payout = alice_fund_amount;
     let bob_refund_payout = bob_fund_amount;
-    let refund_redeem_psbt = build_redeem_transaction(
+    let refund_offchain_txs = build_offchain_transactions(
         &[
             (&alice_payout_vtxo.to_ark_address(), alice_refund_payout),
             (&bob_payout_vtxo.to_ark_address(), bob_refund_payout),
@@ -194,7 +199,7 @@ async fn main() -> Result<()> {
     // We build CETs spending from the DLC VTXO.
     let alice_heads_payout = Amount::from_sat(70_000_000);
     let bob_heads_payout = dlc_output.value - alice_heads_payout;
-    let heads_cet_redeem_psbt = build_redeem_transaction(
+    let heads_cet_offchain_txs = build_offchain_transactions(
         &[
             (&alice_payout_vtxo.to_ark_address(), alice_heads_payout),
             (&bob_payout_vtxo.to_ark_address(), bob_heads_payout),
@@ -206,7 +211,7 @@ async fn main() -> Result<()> {
 
     let alice_tails_payout = Amount::from_sat(25_000_000);
     let bob_tails_payout = dlc_output.value - alice_tails_payout;
-    let tails_cet_redeem_psbt = build_redeem_transaction(
+    let tails_cet_offchain_txs = build_offchain_transactions(
         &[
             (&alice_payout_vtxo.to_ark_address(), alice_tails_payout),
             (&bob_payout_vtxo.to_ark_address(), bob_tails_payout),
@@ -218,14 +223,17 @@ async fn main() -> Result<()> {
 
     // First, Alice and Bob sign the refund TX.
 
-    let refund_redeem_psbt = sign_refund_redeem_tx(
-        refund_redeem_psbt.clone(),
+    let SignedRefundOffchainTransactions {
+        virtual_tx: refund_virtual_tx,
+        checkpoint_tx: mut signed_refund_checkpoint_tx,
+    } = sign_refund_offchain_transactions(
+        refund_offchain_txs.clone(),
         &alice_kp,
         &bob_kp,
         &musig_key_agg_cache,
         &dlc_vtxo_input,
     )
-    .context("signing heads CET")?;
+    .context("signing refund offchain TXs")?;
 
     // Then, Alice and Bob sign the coin flip CETs.
 
@@ -246,64 +254,140 @@ async fn main() -> Result<()> {
     // Both parties end up with a copy of every CET (one per outcome). The transactions cannot yet
     // be published because the adaptor signatures need to be completed with the oracle's adaptor.
 
-    let (heads_cet_redeem_psbt, heads_musig_nonce_parity) = sign_cet_redeem_tx(
-        heads_cet_redeem_psbt.clone(),
+    let SignedCetOffchainTransactions {
+        virtual_cet: heads_virtual_cet,
+        virtual_cet_parity: heads_virtual_cet_parity,
+        checkpoint_tx: heads_signed_checkpoint_tx,
+        checkpoint_tx_parity: heads_checkpoint_tx_parity,
+    } = sign_cet_offchain_txs(
+        heads_cet_offchain_txs.clone(),
         &alice_kp,
         &bob_kp,
         &musig_key_agg_cache,
         heads_adaptor_pk,
         &dlc_vtxo_input,
     )
-    .context("signing heads CET")?;
+    .context("signing heads CET offchain TXs")?;
 
-    let (tails_cet_redeem_psbt, tails_musig_nonce_parity) = sign_cet_redeem_tx(
-        tails_cet_redeem_psbt.clone(),
+    let SignedCetOffchainTransactions {
+        virtual_cet: tails_virtual_cet,
+        virtual_cet_parity: tails_virtual_cet_parity,
+        checkpoint_tx: tails_signed_checkpoint_tx,
+        checkpoint_tx_parity: tails_checkpoint_tx_parity,
+    } = sign_cet_offchain_txs(
+        tails_cet_offchain_txs.clone(),
         &alice_kp,
         &bob_kp,
         &musig_key_agg_cache,
         tails_adaptor_pk,
         &dlc_vtxo_input,
     )
-    .context("signing tails CET")?;
+    .context("signing tails CET offchain TXs")?;
 
     // Finally, Alice and Bob sign the DLC funding transaction.
 
-    sign_redeem_transaction(
+    sign_offchain_virtual_transaction(
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let sig = secp.sign_schnorr_no_aux_rand(&msg, &alice_kp);
 
             Ok((sig, alice_xonly_pk))
         },
-        &mut dlc_funding_redeem_psbt,
-        &[alice_virtual_tx_input.clone(), bob_virtual_tx_input.clone()],
-        0,
+        &mut dlc_virtual_tx,
+        &dlc_checkpoint_txs
+            .iter()
+            .map(|(_, output, outpoint)| (output.clone(), *outpoint))
+            .collect::<Vec<_>>(),
+        0, // Alice's DLC-funding virtual TX input.
     )
-    .context("Alice signing funding TX")?;
+    .context("failed to sign DLC-funding virtual TX as Alice")?;
 
-    sign_redeem_transaction(
+    sign_offchain_virtual_transaction(
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let sig = secp.sign_schnorr_no_aux_rand(&msg, &bob_kp);
 
             Ok((sig, bob_xonly_pk))
         },
-        &mut dlc_funding_redeem_psbt,
-        &[alice_virtual_tx_input, bob_virtual_tx_input],
-        1,
+        &mut dlc_virtual_tx,
+        &dlc_checkpoint_txs
+            .iter()
+            .map(|(_, output, outpoint)| (output.clone(), *outpoint))
+            .collect::<Vec<_>>(),
+        1, // Bob's DLC-funding virtual TX input.
     )
-    .context("Bob signing funding TX")?;
+    .context("failed to sign DLC-funding virtual TX as Bob")?;
+
+    let dlc_funding_virtual_txid = dlc_virtual_tx.unsigned_tx.compute_txid();
 
     // Submit DLC funding transaction.
-    grpc_client
-        .submit_redeem_transaction(dlc_funding_redeem_psbt)
+    let res = grpc_client
+        .submit_offchain_transaction_request(
+            dlc_virtual_tx,
+            dlc_checkpoint_txs
+                .into_iter()
+                .map(|(psbt, _, _)| psbt)
+                .collect(),
+        )
         .await
-        .context("submitting funding TX")?;
+        .context("failed to submit offchain TX request to fund DLC")?;
+
+    let mut alice_signed_checkpoint_psbt = res.signed_checkpoint_txs[0].clone();
+    sign_checkpoint_transaction(
+        |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
+            let sig = secp.sign_schnorr_no_aux_rand(&msg, &alice_kp);
+
+            Ok((sig, alice_xonly_pk))
+        },
+        &mut alice_signed_checkpoint_psbt,
+        &alice_dlc_input,
+    )
+    .context("failed to sign Alice's DLC-funding checkpoint TX")?;
+
+    let mut bob_signed_checkpoint_psbt = res.signed_checkpoint_txs[1].clone();
+    sign_checkpoint_transaction(
+        |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
+            let sig = secp.sign_schnorr_no_aux_rand(&msg, &bob_kp);
+
+            Ok((sig, bob_xonly_pk))
+        },
+        &mut bob_signed_checkpoint_psbt,
+        &bob_dlc_input,
+    )
+    .context("failed to sign Bob's DLC-funding checkpoint TX")?;
+
+    grpc_client
+        .finalize_offchain_transaction(
+            dlc_funding_virtual_txid,
+            vec![alice_signed_checkpoint_psbt, bob_signed_checkpoint_psbt],
+        )
+        .await
+        .context("failed to finalize DLC-funding offchain transaction")?;
+
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     if RUN_REFUND_SCENARIO {
-        grpc_client
-            .submit_redeem_transaction(refund_redeem_psbt)
+        let refund_virtual_txid = refund_virtual_tx.unsigned_tx.compute_txid();
+
+        let res = grpc_client
+            .submit_offchain_transaction_request(
+                refund_virtual_tx,
+                refund_offchain_txs
+                    .checkpoint_txs
+                    .into_iter()
+                    .map(|(psbt, _, _)| psbt)
+                    .collect(),
+            )
             .await
-            .context("submitting refund TX")?;
+            .context("failed to submit offchain TX request to refund DLC")?;
+
+        signed_refund_checkpoint_tx
+            .combine(res.signed_checkpoint_txs[0].clone())
+            .context("failed to combine signed refund TXs")?;
+
+        grpc_client
+            .finalize_offchain_transaction(refund_virtual_txid, vec![signed_refund_checkpoint_tx])
+            .await
+            .context("failed to finalize DLC-refund offchain transaction")?;
+
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         {
@@ -338,13 +422,31 @@ async fn main() -> Result<()> {
     let attestation = oracle.attest(event, is_heads)?;
 
     // Only one of the CETs is "unlocked".
-    let (mut unlocked_cet_redeem_psbt, musig_nonce_parity) = if is_heads {
-        (heads_cet_redeem_psbt, heads_musig_nonce_parity)
+    let (
+        mut unlocked_virtual_cet_psbt,
+        unlocked_virtual_cet_parity,
+        mut unlocked_signed_checkpoint_psbt,
+        unlocked_checkpoint_psbt,
+        unlocked_checkpoint_parity,
+    ) = if is_heads {
+        (
+            heads_virtual_cet,
+            heads_virtual_cet_parity,
+            heads_signed_checkpoint_tx,
+            heads_cet_offchain_txs.checkpoint_txs[0].0.clone(),
+            heads_checkpoint_tx_parity,
+        )
     } else {
-        (tails_cet_redeem_psbt, tails_musig_nonce_parity)
+        (
+            tails_virtual_cet,
+            tails_virtual_cet_parity,
+            tails_signed_checkpoint_tx,
+            tails_cet_offchain_txs.checkpoint_txs[0].0.clone(),
+            tails_checkpoint_tx_parity,
+        )
     };
 
-    let mut input = unlocked_cet_redeem_psbt.inputs[0]
+    let mut input = unlocked_virtual_cet_psbt.inputs[0]
         .tap_script_sigs
         .first_entry()
         .context("one sig")?;
@@ -357,16 +459,53 @@ async fn main() -> Result<()> {
 
     // Complete the adaptor signature, producing a valid signature for this CET.
 
-    let sig = zkp::musig::adapt(adaptor_sig, adaptor, musig_nonce_parity);
+    let sig = zkp::musig::adapt(adaptor_sig, adaptor, unlocked_virtual_cet_parity);
     let sig = schnorr::Signature::from_slice(sig.as_ref()).expect("valid sig");
 
     input_sig.signature = sig;
 
     // Publish the CET.
-    grpc_client
-        .submit_redeem_transaction(unlocked_cet_redeem_psbt)
+
+    let unlocked_virtual_cet_txid = unlocked_virtual_cet_psbt.unsigned_tx.compute_txid();
+
+    let res = grpc_client
+        .submit_offchain_transaction_request(
+            unlocked_virtual_cet_psbt,
+            vec![unlocked_checkpoint_psbt],
+        )
         .await
-        .context("submitting CET")?;
+        .context("failed to submit offchain TX request for CET")?;
+
+    let mut input = unlocked_signed_checkpoint_psbt.inputs[0]
+        .tap_script_sigs
+        .first_entry()
+        .context("one sig")?;
+    let input_sig = input.get_mut();
+
+    let adaptor_sig =
+        zkp::schnorr::Signature::from_slice(input_sig.signature.as_ref()).expect("valid sig");
+
+    let adaptor = zkp::Tweak::from_slice(attestation.as_ref()).expect("valid tweak");
+
+    // Complete the adaptor signature, producing a valid signature for this checkpoint transaction.
+
+    let sig = zkp::musig::adapt(adaptor_sig, adaptor, unlocked_checkpoint_parity);
+    let sig = schnorr::Signature::from_slice(sig.as_ref()).expect("valid sig");
+
+    input_sig.signature = sig;
+
+    unlocked_signed_checkpoint_psbt
+        .combine(res.signed_checkpoint_txs[0].clone())
+        .context("failed to combine signed CETs")?;
+
+    grpc_client
+        .finalize_offchain_transaction(
+            unlocked_virtual_cet_txid,
+            vec![unlocked_signed_checkpoint_psbt],
+        )
+        .await
+        .context("failed to finalize CET offchain transaction")?;
+
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Verify that Alice and Bob receive the expected payouts.
@@ -500,55 +639,74 @@ async fn fund_vtxo(
     Ok(vtxo_input)
 }
 
-/// Sign a refund redeem transaction.
+/// The result of signing DLC refund transactions between Alice and Bob.
+///
+/// These do not include the server signature yet.
+struct SignedRefundOffchainTransactions {
+    virtual_tx: Psbt,
+    checkpoint_tx: Psbt,
+}
+
+/// Sign the [`OffchainTransactions`] for the refund path.
 ///
 /// This function represents a session between the two signing parties. It would normally be
 /// performed over the internet.
-fn sign_refund_redeem_tx(
-    mut refund_redeem_psbt: Psbt,
+fn sign_refund_offchain_transactions(
+    offchain_txs: OffchainTransactions,
     alice_kp: &Keypair,
     bob_kp: &Keypair,
     musig_key_agg_cache: &MusigKeyAggCache,
     dlc_vtxo_input: &redeem::VtxoInput,
-) -> Result<Psbt> {
+) -> Result<SignedRefundOffchainTransactions> {
     let zkp = zkp::Secp256k1::new();
     let mut rng = thread_rng();
 
-    let shared_pk = from_zkp_xonly(musig_key_agg_cache.agg_pk());
+    let OffchainTransactions {
+        virtual_tx: mut refund_virtual_tx,
+        checkpoint_txs: refund_checkpoint_txs,
+    } = offchain_txs;
 
-    let alice_pk = alice_kp.public_key();
+    // For a transaction spending a DLC output, there can only be one input.
+    let (mut refund_checkpoint_psbt, refund_checkpoint_output, refund_checkpoint_outpoint) =
+        refund_checkpoint_txs[0].clone();
 
-    let (alice_musig_nonce, alice_musig_pub_nonce) = {
-        let session_id = MusigSessionId::new(&mut rng);
-        let extra_rand = rng.gen();
-        new_musig_nonce_pair(
-            &zkp,
-            session_id,
-            None,
-            None,
-            to_zkp_pk(alice_pk),
-            None,
-            Some(extra_rand),
-        )?
-    };
+    // Signing the virtual TX.
+    {
+        let shared_pk = from_zkp_xonly(musig_key_agg_cache.agg_pk());
 
-    let bob_pk = bob_kp.public_key();
+        let alice_pk = alice_kp.public_key();
 
-    let (bob_musig_nonce, bob_musig_pub_nonce) = {
-        let session_id = MusigSessionId::new(&mut rng);
-        let extra_rand = rng.gen();
-        new_musig_nonce_pair(
-            &zkp,
-            session_id,
-            None,
-            None,
-            to_zkp_pk(bob_pk),
-            None,
-            Some(extra_rand),
-        )?
-    };
+        let (alice_musig_nonce, alice_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(alice_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
 
-    let sign_refund_fn =
+        let bob_pk = bob_kp.public_key();
+
+        let (bob_musig_nonce, bob_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(bob_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
+
+        let sign_fn =
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let musig_agg_nonce =
                 MusigAggNonce::new(&zkp, &[alice_musig_pub_nonce, bob_musig_pub_nonce]);
@@ -578,68 +736,168 @@ fn sign_refund_redeem_tx(
             Ok((sig, shared_pk))
         };
 
-    sign_redeem_transaction(
-        sign_refund_fn,
-        &mut refund_redeem_psbt,
-        &[dlc_vtxo_input.clone()],
-        0,
-    )
-    .context("signing refund TX")?;
+        sign_offchain_virtual_transaction(
+            sign_fn,
+            &mut refund_virtual_tx,
+            &[(refund_checkpoint_output, refund_checkpoint_outpoint)],
+            0,
+        )
+        .context("signing refund virtual TX")?;
+    }
 
-    Ok(refund_redeem_psbt)
+    // Signing the checkpoint TX. Some unnecessary duplication here.
+    {
+        let shared_pk = from_zkp_xonly(musig_key_agg_cache.agg_pk());
+
+        let alice_pk = alice_kp.public_key();
+
+        let (alice_musig_nonce, alice_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(alice_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
+
+        let bob_pk = bob_kp.public_key();
+
+        let (bob_musig_nonce, bob_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(bob_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
+
+        let sign_fn =
+        |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
+            let musig_agg_nonce =
+                MusigAggNonce::new(&zkp, &[alice_musig_pub_nonce, bob_musig_pub_nonce]);
+            let msg =
+                zkp::Message::from_digest_slice(msg.as_ref()).map_err(ark_core::Error::ad_hoc)?;
+
+            let musig_session = MusigSession::new(&zkp, musig_key_agg_cache, musig_agg_nonce, msg);
+
+            let alice_kp = zkp::Keypair::from_seckey_slice(&zkp, &alice_kp.secret_bytes())
+                .expect("valid keypair");
+
+            let alice_sig = musig_session
+                .partial_sign(&zkp, alice_musig_nonce, &alice_kp, musig_key_agg_cache)
+                .map_err(ark_core::Error::ad_hoc)?;
+
+            let bob_kp = zkp::Keypair::from_seckey_slice(&zkp, &bob_kp.secret_bytes())
+                .expect("valid keypair");
+
+            let bob_sig = musig_session
+                .partial_sign(&zkp, bob_musig_nonce, &bob_kp, musig_key_agg_cache)
+                .map_err(ark_core::Error::ad_hoc)?;
+
+            let sig = musig_session.partial_sig_agg(&[alice_sig, bob_sig]);
+            let sig =
+                schnorr::Signature::from_slice(sig.as_ref()).map_err(ark_core::Error::ad_hoc)?;
+
+            Ok((sig, shared_pk))
+        };
+
+        // Normally we would sign this one after communicating with the server, but since this
+        // output is owned by two parties we need to do this ahead of time.
+        sign_checkpoint_transaction(sign_fn, &mut refund_checkpoint_psbt, dlc_vtxo_input)
+            .context("signing refund checkpoint TX")?;
+    }
+
+    Ok(SignedRefundOffchainTransactions {
+        virtual_tx: refund_virtual_tx,
+        checkpoint_tx: refund_checkpoint_psbt,
+    })
 }
 
-/// Sign a CET redeem transaction.
+/// The result of signing CET transactions between Alice and Bob.
+///
+/// These do not include the server signature yet.
+///
+/// TODO: Do we really need to have adaptor signatures for both the virtual TX and the checkpoint
+/// TX. It seems like only the checkpoint TX needs an adaptor signature, but it feels weird.
+struct SignedCetOffchainTransactions {
+    virtual_cet: Psbt,
+    virtual_cet_parity: zkp::Parity,
+    checkpoint_tx: Psbt,
+    checkpoint_tx_parity: zkp::Parity,
+}
+
+/// Sign the [`OffchainTransactions`] for the CET path.
 ///
 /// This function represents a session between the two signing parties. It would normally be
 /// performed over the internet.
-fn sign_cet_redeem_tx(
-    mut cet_redeem_psbt: Psbt,
+fn sign_cet_offchain_txs(
+    offchain_txs: OffchainTransactions,
     alice_kp: &Keypair,
     bob_kp: &Keypair,
     musig_key_agg_cache: &MusigKeyAggCache,
     adaptor_pk: zkp::PublicKey,
     dlc_vtxo_input: &redeem::VtxoInput,
-) -> Result<(Psbt, zkp::Parity)> {
+) -> Result<SignedCetOffchainTransactions> {
     let zkp = zkp::Secp256k1::new();
     let mut rng = thread_rng();
 
-    let shared_pk = from_zkp_xonly(musig_key_agg_cache.agg_pk());
+    let OffchainTransactions {
+        virtual_tx: mut virtual_cet,
+        checkpoint_txs: cet_checkpoint_txs,
+    } = offchain_txs;
 
-    let alice_pk = alice_kp.public_key();
+    // For a transaction spending a DLC output, there can only be one input.
+    let (mut cet_checkpoint_psbt, cet_checkpoint_output, cet_checkpoint_outpoint) =
+        cet_checkpoint_txs[0].clone();
 
-    let (alice_musig_nonce, alice_musig_pub_nonce) = {
-        let session_id = MusigSessionId::new(&mut rng);
-        let extra_rand = rng.gen();
-        new_musig_nonce_pair(
-            &zkp,
-            session_id,
-            None,
-            None,
-            to_zkp_pk(alice_pk),
-            None,
-            Some(extra_rand),
-        )?
-    };
+    // Signing the virtual CET.
+    let virtual_cet_parity = {
+        let shared_pk = from_zkp_xonly(musig_key_agg_cache.agg_pk());
 
-    let bob_pk = bob_kp.public_key();
+        let alice_pk = alice_kp.public_key();
 
-    let (bob_musig_nonce, bob_musig_pub_nonce) = {
-        let session_id = MusigSessionId::new(&mut rng);
-        let extra_rand = rng.gen();
-        new_musig_nonce_pair(
-            &zkp,
-            session_id,
-            None,
-            None,
-            to_zkp_pk(bob_pk),
-            None,
-            Some(extra_rand),
-        )?
-    };
+        let (alice_musig_nonce, alice_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(alice_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
 
-    let mut musig_nonce_parity = None;
-    let sign_cet_fn =
+        let bob_pk = bob_kp.public_key();
+
+        let (bob_musig_nonce, bob_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(bob_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
+
+        let mut musig_nonce_parity = None;
+        let sign_fn =
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let musig_agg_nonce =
                 MusigAggNonce::new(&zkp, &[alice_musig_pub_nonce, bob_musig_pub_nonce]);
@@ -677,17 +935,106 @@ fn sign_cet_redeem_tx(
             Ok((sig, shared_pk))
         };
 
-    sign_redeem_transaction(
-        sign_cet_fn,
-        &mut cet_redeem_psbt,
-        &[dlc_vtxo_input.clone()],
-        0,
-    )
-    .context("signing CET")?;
+        sign_offchain_virtual_transaction(
+            sign_fn,
+            &mut virtual_cet,
+            &[(cet_checkpoint_output, cet_checkpoint_outpoint)],
+            0,
+        )
+        .context("signing virtual CET")?;
 
-    let musig_nonce_parity = musig_nonce_parity.context("to be set")?;
+        musig_nonce_parity.context("to be set")?
+    };
 
-    Ok((cet_redeem_psbt, musig_nonce_parity))
+    // Signing the checkpoint TX. Some unnecessary duplication here.
+    let checkpoint_tx_parity = {
+        let shared_pk = from_zkp_xonly(musig_key_agg_cache.agg_pk());
+
+        let alice_pk = alice_kp.public_key();
+
+        let (alice_musig_nonce, alice_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(alice_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
+
+        let bob_pk = bob_kp.public_key();
+
+        let (bob_musig_nonce, bob_musig_pub_nonce) = {
+            let session_id = MusigSessionId::new(&mut rng);
+            let extra_rand = rng.gen();
+            new_musig_nonce_pair(
+                &zkp,
+                session_id,
+                None,
+                None,
+                to_zkp_pk(bob_pk),
+                None,
+                Some(extra_rand),
+            )?
+        };
+
+        let mut musig_nonce_parity = None;
+        let sign_fn =
+        |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
+            let musig_agg_nonce =
+                MusigAggNonce::new(&zkp, &[alice_musig_pub_nonce, bob_musig_pub_nonce]);
+            let msg =
+                zkp::Message::from_digest_slice(msg.as_ref()).map_err(ark_core::Error::ad_hoc)?;
+
+            let musig_session = MusigSession::with_adaptor(
+                &zkp,
+                musig_key_agg_cache,
+                musig_agg_nonce,
+                msg,
+                adaptor_pk,
+            );
+
+            musig_nonce_parity = Some(musig_session.nonce_parity());
+
+            let alice_kp = zkp::Keypair::from_seckey_slice(&zkp, &alice_kp.secret_bytes())
+                .expect("valid keypair");
+
+            let alice_sig = musig_session
+                .partial_sign(&zkp, alice_musig_nonce, &alice_kp, musig_key_agg_cache)
+                .map_err(ark_core::Error::ad_hoc)?;
+
+            let bob_kp = zkp::Keypair::from_seckey_slice(&zkp, &bob_kp.secret_bytes())
+                .expect("valid keypair");
+
+            let bob_sig = musig_session
+                .partial_sign(&zkp, bob_musig_nonce, &bob_kp, musig_key_agg_cache)
+                .map_err(ark_core::Error::ad_hoc)?;
+
+            let sig = musig_session.partial_sig_agg(&[alice_sig, bob_sig]);
+            let sig =
+                schnorr::Signature::from_slice(sig.as_ref()).map_err(ark_core::Error::ad_hoc)?;
+
+            Ok((sig, shared_pk))
+        };
+
+        // Normally we would sign this one after communicating with the server, but since this
+        // output is owned by two parties we need to do this ahead of time.
+        sign_checkpoint_transaction(sign_fn, &mut cet_checkpoint_psbt, dlc_vtxo_input)
+            .context("signing CET checkpoint TX")?;
+
+        musig_nonce_parity.context("to be set")?
+    };
+
+    Ok(SignedCetOffchainTransactions {
+        virtual_cet,
+        virtual_cet_parity,
+        checkpoint_tx: cet_checkpoint_psbt,
+        checkpoint_tx_parity,
+    })
 }
 
 /// Simulation of a DLC oracle.
@@ -949,7 +1296,6 @@ async fn settle(
         vtxo_inputs.as_slice(),
         round_finalization_event.connector_tree,
         &round_finalization_event.connectors_index,
-        round_finalization_event.min_relay_fee_rate,
         &server_info.forfeit_address,
         server_info.dust,
     )?;

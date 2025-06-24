@@ -188,10 +188,8 @@ pub struct RoundFinalizationEvent {
     pub vtxo_tree: ::core::option::Option<Tree>,
     #[prost(message, optional, tag = "4")]
     pub connectors: ::core::option::Option<Tree>,
-    #[prost(int64, tag = "5")]
-    pub min_relay_fee_rate: i64,
     /// vtxo outpoint encoded as string -> connector outpoint
-    #[prost(map = "string, message", tag = "6")]
+    #[prost(map = "string, message", tag = "5")]
     pub connectors_index: ::std::collections::HashMap<::prost::alloc::string::String, Outpoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -771,17 +769,30 @@ pub struct PingRequest {
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct PingResponse {}
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubmitRedeemTxRequest {
+pub struct SubmitOffchainTxRequest {
     #[prost(string, tag = "1")]
-    pub redeem_tx: ::prost::alloc::string::String,
+    pub virtual_tx: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub checkpoint_txs: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubmitRedeemTxResponse {
+pub struct SubmitOffchainTxResponse {
     #[prost(string, tag = "1")]
-    pub signed_redeem_tx: ::prost::alloc::string::String,
+    pub signed_virtual_tx: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub txid: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "3")]
+    pub signed_checkpoint_txs: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FinalizeOffchainTxRequest {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub checkpoint_txs: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct FinalizeOffchainTxResponse {}
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct GetTransactionsStreamRequest {}
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1073,19 +1084,35 @@ pub mod ark_service_client {
                 .insert(GrpcMethod::new("ark.v1.ArkService", "Ping"));
             self.inner.unary(req, path, codec).await
         }
-        pub async fn submit_redeem_tx(
+        pub async fn submit_offchain_tx(
             &mut self,
-            request: impl tonic::IntoRequest<super::SubmitRedeemTxRequest>,
-        ) -> std::result::Result<tonic::Response<super::SubmitRedeemTxResponse>, tonic::Status>
+            request: impl tonic::IntoRequest<super::SubmitOffchainTxRequest>,
+        ) -> std::result::Result<tonic::Response<super::SubmitOffchainTxResponse>, tonic::Status>
         {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
             })?;
             let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/SubmitRedeemTx");
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/SubmitOffchainTx");
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("ark.v1.ArkService", "SubmitRedeemTx"));
+                .insert(GrpcMethod::new("ark.v1.ArkService", "SubmitOffchainTx"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn finalize_offchain_tx(
+            &mut self,
+            request: impl tonic::IntoRequest<super::FinalizeOffchainTxRequest>,
+        ) -> std::result::Result<tonic::Response<super::FinalizeOffchainTxResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.ArkService/FinalizeOffchainTx");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.ArkService", "FinalizeOffchainTx"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn get_transactions_stream(

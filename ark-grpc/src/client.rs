@@ -11,7 +11,6 @@ use crate::generated::ark::v1::ListVtxosRequest;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterIntentRequest;
-use crate::generated::ark::v1::SubmitRedeemTxRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
@@ -20,6 +19,7 @@ use crate::Error;
 use ark_core::proof_of_funds;
 use ark_core::server::ChainedTx;
 use ark_core::server::ChainedTxType;
+use ark_core::server::FinalizeOffchainTxResponse;
 use ark_core::server::Info;
 use ark_core::server::ListVtxo;
 use ark_core::server::RedeemTransaction;
@@ -31,6 +31,7 @@ use ark_core::server::RoundSigningEvent;
 use ark_core::server::RoundSigningNoncesGeneratedEvent;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::RoundTransaction;
+use ark_core::server::SubmitOffchainTxResponse;
 use ark_core::server::TransactionEvent;
 use ark_core::server::TxTree;
 use ark_core::server::TxTreeLevel;
@@ -176,7 +177,11 @@ impl Client {
         Ok(request_id)
     }
 
-    pub async fn submit_redeem_transaction(&self, redeem_psbt: Psbt) -> Result<Psbt, Error> {
+    pub async fn submit_offchain_transaction_request(
+        &self,
+        virtual_tx: Psbt,
+        checkpoint_txs: Vec<Psbt>,
+    ) -> Result<SubmitOffchainTxResponse, Error> {
         let mut client = self.inner_ark_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
@@ -184,19 +189,72 @@ impl Client {
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        let redeem_tx = base64.encode(redeem_psbt.serialize());
+        let virtual_tx = base64.encode(virtual_tx.serialize());
+
+        let checkpoint_txs = checkpoint_txs
+            .into_iter()
+            .map(|tx| base64.encode(tx.serialize()))
+            .collect();
 
         let res = client
-            .submit_redeem_tx(SubmitRedeemTxRequest { redeem_tx })
+            .submit_offchain_tx(generated::ark::v1::SubmitOffchainTxRequest {
+                virtual_tx,
+                checkpoint_txs,
+            })
             .await
             .map_err(Error::request)?;
 
-        let psbt = base64
-            .decode(res.into_inner().signed_redeem_tx)
-            .map_err(Error::conversion)?;
-        let psbt = Psbt::deserialize(&psbt).map_err(Error::conversion)?;
+        let res = res.into_inner();
 
-        Ok(psbt)
+        let signed_virtual_tx = res.signed_virtual_tx;
+        let signed_virtual_tx = base64
+            .decode(signed_virtual_tx)
+            .map_err(Error::conversion)?;
+        let signed_virtual_tx = Psbt::deserialize(&signed_virtual_tx).map_err(Error::conversion)?;
+
+        let signed_checkpoint_txs = res
+            .signed_checkpoint_txs
+            .into_iter()
+            .map(|tx| {
+                let tx = base64.decode(tx).map_err(Error::conversion)?;
+                let tx = Psbt::deserialize(&tx).map_err(Error::conversion)?;
+
+                Ok(tx)
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
+        Ok(SubmitOffchainTxResponse {
+            signed_virtual_tx,
+            signed_checkpoint_txs,
+        })
+    }
+
+    pub async fn finalize_offchain_transaction(
+        &self,
+        txid: Txid,
+        checkpoint_txs: Vec<Psbt>,
+    ) -> Result<FinalizeOffchainTxResponse, Error> {
+        let mut client = self.inner_ark_client()?;
+
+        let base64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        let checkpoint_txs = checkpoint_txs
+            .into_iter()
+            .map(|tx| base64.encode(tx.serialize()))
+            .collect();
+
+        client
+            .finalize_offchain_tx(generated::ark::v1::FinalizeOffchainTxRequest {
+                txid: txid.to_string(),
+                checkpoint_txs,
+            })
+            .await
+            .map_err(Error::request)?;
+
+        Ok(FinalizeOffchainTxResponse {})
     }
 
     pub async fn ping(&self, request_id: String) -> Result<(), Error> {
@@ -517,7 +575,6 @@ impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEv
             round_tx,
             vtxo_tree,
             connector_tree,
-            min_relay_fee_rate: value.min_relay_fee_rate,
             connectors_index,
         })
     }

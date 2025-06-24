@@ -95,7 +95,6 @@ pub struct RoundFinalizationEvent {
     pub connector_tree: TxTree,
     /// The key is the VTXO outpoint; the value is the corresponding connector outpoint.
     pub connectors_index: HashMap<OutPoint, OutPoint>,
-    pub min_relay_fee_rate: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -172,3 +171,11 @@ pub enum ChainedTxType {
     Virtual,
     Unspecified,
 }
+
+pub struct SubmitOffchainTxResponse {
+    pub signed_virtual_tx: Psbt,
+    pub signed_checkpoint_txs: Vec<Psbt>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FinalizeOffchainTxResponse {}

@@ -1,4 +1,4 @@
-use crate::redeem::anchor_output;
+use crate::anchor_output;
 use crate::server;
 use crate::BoardingOutput;
 use crate::Error;
@@ -247,7 +247,7 @@ pub fn create_unilateral_exit_transaction(
     Ok(tx)
 }
 
-/// Build the unilateral exit tree of TXIDs for a VTXO from a [`sever::VtxoChains`].
+/// Build the unilateral exit tree of TXIDs for a VTXO from a [`server::VtxoChains`].
 pub fn build_unilateral_exit_tree_txids(
     vtxo_chains: &server::VtxoChains,
     // The TXID of the VTXO we want to commit on-chain.
