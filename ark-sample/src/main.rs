@@ -10,8 +10,8 @@ use ark_core::generate_incoming_vtxo_transaction_history;
 use ark_core::generate_outgoing_vtxo_transaction_history;
 use ark_core::proof_of_funds;
 use ark_core::redeem;
-use ark_core::redeem::build_redeem_transaction;
-use ark_core::redeem::sign_redeem_transaction;
+use ark_core::redeem::build_offchain_transactions;
+use ark_core::redeem::sign_checkpoint_transaction;
 use ark_core::round;
 use ark_core::round::create_and_sign_forfeit_txs;
 use ark_core::round::generate_nonce_tree;
@@ -249,7 +249,7 @@ async fn main() -> Result<()> {
             let secp = Secp256k1::new();
             let kp = Keypair::from_secret_key(&secp, &sk);
 
-            let mut redeem_psbt = build_redeem_transaction(
+            let mut redeem_psbt = build_offchain_transactions(
                 &[(&address.0, amount)],
                 Some(&change_address),
                 &vtxo_inputs,
@@ -264,14 +264,14 @@ async fn main() -> Result<()> {
                 };
 
             for (i, _) in vtxo_inputs.iter().enumerate() {
-                sign_redeem_transaction(sign_fn, &mut redeem_psbt, &vtxo_inputs, i)?;
+                sign_checkpoint_transaction(sign_fn, &mut redeem_psbt, &vtxo_inputs, i)?;
             }
 
-            let psbt = grpc_client
-                .submit_redeem_transaction(redeem_psbt.clone())
+            let res = grpc_client
+                .submit_offchain_transaction_request(todo!(), todo!())
                 .await?;
 
-            let txid = psbt.extract_tx()?.compute_txid();
+            let txid = res.signed_virtual_tx.extract_tx()?.compute_txid();
 
             println!("Sent {amount} to {} in transaction {txid}", address.0);
         }
@@ -500,7 +500,6 @@ async fn settle(
         vtxo_inputs.as_slice(),
         round_finalization_event.connector_tree,
         &round_finalization_event.connectors_index,
-        round_finalization_event.min_relay_fee_rate,
         &server_info.forfeit_address,
         server_info.dust,
     )?;

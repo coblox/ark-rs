@@ -1,6 +1,6 @@
+use crate::anchor_output;
 use crate::conversions::from_musig_xonly;
 use crate::conversions::to_musig_pk;
-use crate::forfeit_fee::compute_forfeit_min_relay_fee;
 use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::server::TxTree;
 use crate::server::TxTreeNode;
@@ -389,7 +389,6 @@ pub fn create_and_sign_forfeit_txs(
     vtxo_inputs: &[VtxoInput],
     connector_tree: TxTree,
     connector_index: &HashMap<OutPoint, OutPoint>,
-    min_relay_fee_rate_sats_per_kvb: i64,
     server_forfeit_address: &Address,
     // As defined by the server.
     dust: Amount,
@@ -399,7 +398,6 @@ pub fn create_and_sign_forfeit_txs(
 
     let secp = Secp256k1::new();
 
-    let fee_rate_sats_per_kvb = min_relay_fee_rate_sats_per_kvb as u64;
     let connector_amount = dust;
 
     let mut signed_forfeit_psbts = Vec::new();
@@ -409,9 +407,6 @@ pub fn create_and_sign_forfeit_txs(
         outpoint: vtxo_outpoint,
     } in vtxo_inputs.iter()
     {
-        let min_relay_fee =
-            compute_forfeit_min_relay_fee(fee_rate_sats_per_kvb, vtxo, server_forfeit_address);
-
         let connector_outpoint = connector_index.get(vtxo_outpoint).ok_or_else(|| {
             Error::ad_hoc(format!(
                 "connector outpoint missing for VTXO outpoint {vtxo_outpoint}"
@@ -439,12 +434,12 @@ pub fn create_and_sign_forfeit_txs(
             })?;
 
         let forfeit_output = TxOut {
-            value: *vtxo_amount + connector_amount - min_relay_fee,
+            value: *vtxo_amount + connector_amount,
             script_pubkey: server_forfeit_address.script_pubkey(),
         };
 
         let mut forfeit_psbt = Psbt::from_unsigned_tx(Transaction {
-            version: transaction::Version::TWO,
+            version: transaction::Version::non_standard(3),
             lock_time: LockTime::ZERO,
             input: vec![
                 TxIn {
@@ -456,7 +451,7 @@ pub fn create_and_sign_forfeit_txs(
                     ..Default::default()
                 },
             ],
-            output: vec![forfeit_output.clone()],
+            output: vec![forfeit_output.clone(), anchor_output()],
         })
         .map_err(Error::transaction)?;
 

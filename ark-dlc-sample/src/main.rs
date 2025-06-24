@@ -6,8 +6,8 @@ use ark_core::boarding_output::list_boarding_outpoints;
 use ark_core::boarding_output::BoardingOutpoints;
 use ark_core::proof_of_funds;
 use ark_core::redeem;
-use ark_core::redeem::build_redeem_transaction;
-use ark_core::redeem::sign_redeem_transaction;
+use ark_core::redeem::build_offchain_transactions;
+use ark_core::redeem::sign_checkpoint_transaction;
 use ark_core::round;
 use ark_core::round::create_and_sign_forfeit_txs;
 use ark_core::round::generate_nonce_tree;
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
 
     // We build the DLC funding transaction, but we don't "broadcast" it yet. We use it as a
     // reference point to build the rest of the DLC.
-    let mut dlc_funding_redeem_psbt = build_redeem_transaction(
+    let mut dlc_funding_redeem_psbt = build_offchain_transactions(
         &[(
             &dlc_vtxo.to_ark_address(),
             alice_fund_amount + bob_fund_amount,
@@ -181,7 +181,7 @@ async fn main() -> Result<()> {
     // We build a refund transaction spending from the DLC VTXO.
     let alice_refund_payout = alice_fund_amount;
     let bob_refund_payout = bob_fund_amount;
-    let refund_redeem_psbt = build_redeem_transaction(
+    let refund_redeem_psbt = build_offchain_transactions(
         &[
             (&alice_payout_vtxo.to_ark_address(), alice_refund_payout),
             (&bob_payout_vtxo.to_ark_address(), bob_refund_payout),
@@ -194,7 +194,7 @@ async fn main() -> Result<()> {
     // We build CETs spending from the DLC VTXO.
     let alice_heads_payout = Amount::from_sat(70_000_000);
     let bob_heads_payout = dlc_output.value - alice_heads_payout;
-    let heads_cet_redeem_psbt = build_redeem_transaction(
+    let heads_cet_redeem_psbt = build_offchain_transactions(
         &[
             (&alice_payout_vtxo.to_ark_address(), alice_heads_payout),
             (&bob_payout_vtxo.to_ark_address(), bob_heads_payout),
@@ -206,7 +206,7 @@ async fn main() -> Result<()> {
 
     let alice_tails_payout = Amount::from_sat(25_000_000);
     let bob_tails_payout = dlc_output.value - alice_tails_payout;
-    let tails_cet_redeem_psbt = build_redeem_transaction(
+    let tails_cet_redeem_psbt = build_offchain_transactions(
         &[
             (&alice_payout_vtxo.to_ark_address(), alice_tails_payout),
             (&bob_payout_vtxo.to_ark_address(), bob_tails_payout),
@@ -268,7 +268,7 @@ async fn main() -> Result<()> {
 
     // Finally, Alice and Bob sign the DLC funding transaction.
 
-    sign_redeem_transaction(
+    sign_checkpoint_transaction(
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let sig = secp.sign_schnorr_no_aux_rand(&msg, &alice_kp);
 
@@ -280,7 +280,7 @@ async fn main() -> Result<()> {
     )
     .context("Alice signing funding TX")?;
 
-    sign_redeem_transaction(
+    sign_checkpoint_transaction(
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let sig = secp.sign_schnorr_no_aux_rand(&msg, &bob_kp);
 
@@ -294,14 +294,14 @@ async fn main() -> Result<()> {
 
     // Submit DLC funding transaction.
     grpc_client
-        .submit_redeem_transaction(dlc_funding_redeem_psbt)
+        .submit_offchain_transaction_request(todo!(), todo!())
         .await
         .context("submitting funding TX")?;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     if RUN_REFUND_SCENARIO {
         grpc_client
-            .submit_redeem_transaction(refund_redeem_psbt)
+            .submit_offchain_transaction_request(todo!(), todo!())
             .await
             .context("submitting refund TX")?;
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -364,7 +364,7 @@ async fn main() -> Result<()> {
 
     // Publish the CET.
     grpc_client
-        .submit_redeem_transaction(unlocked_cet_redeem_psbt)
+        .submit_offchain_transaction_request(todo!(), todo!())
         .await
         .context("submitting CET")?;
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -578,7 +578,7 @@ fn sign_refund_redeem_tx(
             Ok((sig, shared_pk))
         };
 
-    sign_redeem_transaction(
+    sign_checkpoint_transaction(
         sign_refund_fn,
         &mut refund_redeem_psbt,
         &[dlc_vtxo_input.clone()],
@@ -677,7 +677,7 @@ fn sign_cet_redeem_tx(
             Ok((sig, shared_pk))
         };
 
-    sign_redeem_transaction(
+    sign_checkpoint_transaction(
         sign_cet_fn,
         &mut cet_redeem_psbt,
         &[dlc_vtxo_input.clone()],
@@ -949,7 +949,6 @@ async fn settle(
         vtxo_inputs.as_slice(),
         round_finalization_event.connector_tree,
         &round_finalization_event.connectors_index,
-        round_finalization_event.min_relay_fee_rate,
         &server_info.forfeit_address,
         server_info.dust,
     )?;

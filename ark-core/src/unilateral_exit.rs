@@ -1,4 +1,4 @@
-use crate::redeem::anchor_output;
+use crate::anchor_output;
 use crate::server;
 use crate::BoardingOutput;
 use crate::Error;

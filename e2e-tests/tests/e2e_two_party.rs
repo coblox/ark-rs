@@ -83,7 +83,7 @@ pub async fn e2e() {
         "Sending VTXO from Alice to Bob"
     );
 
-    let redeem_tx = alice
+    let virtual_txid = alice
         .send_vtxo(bob_offchain_address, send_to_bob_vtxo_amount)
         .await
         .unwrap();
@@ -94,7 +94,7 @@ pub async fn e2e() {
     tracing::info!(
         ?alice_offchain_balance,
         ?bob_offchain_balance,
-        redeem_txid = %redeem_tx.unsigned_tx.compute_txid(),
+        virtual_txid = %virtual_txid,
         "Sent VTXO from Alice to Bob"
     );
 

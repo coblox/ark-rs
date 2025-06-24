@@ -177,15 +177,16 @@ pub struct Http {
 ///
 /// Rules for HTTP mapping
 ///
-/// 1. Leaf request fields (recursive expansion nested messages in the request message) are
-///    classified into three categories:
+/// 1. Leaf request fields (recursive expansion nested messages in the request
+///     message) are classified into three categories:
 ///     - Fields referred by the path template. They are passed via the URL path.
 ///     - Fields referred by the [HttpRule.body][google.api.HttpRule.body]. They
 ///     are passed via the HTTP
 ///       request body.
-///     - All other fields are passed via the URL query parameters, and the parameter name is the
-///       field path in the request message. A repeated field can be represented as multiple query
-///       parameters under the same name.
+///     - All other fields are passed via the URL query parameters, and the
+///       parameter name is the field path in the request message. A repeated
+///       field can be represented as multiple query parameters under the same
+///       name.
 ///   2. If [HttpRule.body][google.api.HttpRule.body] is "*", there is no URL
 ///   query parameter, all fields
 ///      are passed via URL path and HTTP request body.
@@ -251,8 +252,8 @@ pub struct Http {
 ///
 ///      http:
 ///        rules:
-///          - selector: example.v1.Messaging.GetMessage get:
-///            /v1/messages/{message_id}/{sub.subfield}
+///          - selector: example.v1.Messaging.GetMessage
+///            get: /v1/messages/{message_id}/{sub.subfield}
 ///
 /// Special notes
 ///

@@ -6,14 +6,16 @@ use crate::Client;
 use crate::Error;
 use ark_core::coin_select::select_vtxos;
 use ark_core::redeem;
-use ark_core::redeem::build_redeem_transaction;
-use ark_core::redeem::sign_redeem_transaction;
+use ark_core::redeem::build_offchain_transactions;
+use ark_core::redeem::sign_checkpoint_transaction;
+use ark_core::redeem::sign_offchain_virtual_transaction;
+use ark_core::redeem::OffchainTransactions;
 use ark_core::ArkAddress;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::schnorr;
 use bitcoin::Amount;
-use bitcoin::Psbt;
+use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 
 impl<B, W> Client<B, W>
@@ -21,7 +23,7 @@ where
     B: Blockchain,
     W: BoardingWallet + OnchainWallet,
 {
-    pub async fn send_vtxo(&self, address: ArkAddress, amount: Amount) -> Result<Psbt, Error> {
+    pub async fn send_vtxo(&self, address: ArkAddress, amount: Amount) -> Result<Txid, Error> {
         let spendable_vtxos = self
             .spendable_vtxos()
             .await
@@ -67,9 +69,11 @@ where
 
         let (change_address, _) = self.get_offchain_address()?;
 
-        let mut redeem_psbt =
-            build_redeem_transaction(&[(&address, amount)], Some(&change_address), &vtxo_inputs)
-                .map_err(Error::from)?;
+        let OffchainTransactions {
+            mut virtual_tx,
+            checkpoint_txs,
+        } = build_offchain_transactions(&[(&address, amount)], Some(&change_address), &vtxo_inputs)
+            .map_err(Error::from)?;
 
         let sign_fn =
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
@@ -79,17 +83,55 @@ where
             Ok((sig, pk))
         };
 
-        for (i, _) in vtxo_inputs.iter().enumerate() {
-            sign_redeem_transaction(sign_fn, &mut redeem_psbt, &vtxo_inputs, i)?;
+        for i in 0..checkpoint_txs.len() {
+            sign_offchain_virtual_transaction(
+                sign_fn,
+                &mut virtual_tx,
+                &checkpoint_txs
+                    .iter()
+                    .map(|(_, output, outpoint)| (output.clone(), *outpoint))
+                    .collect::<Vec<_>>(),
+                i,
+            )?;
         }
 
-        let redeem_psbt = self
+        let virtual_txid = virtual_tx.unsigned_tx.compute_txid();
+
+        let mut res = self
             .network_client()
-            .submit_redeem_transaction(redeem_psbt.clone())
+            .submit_offchain_transaction_request(
+                virtual_tx,
+                checkpoint_txs
+                    .into_iter()
+                    .map(|(psbt, _, _)| psbt)
+                    .collect(),
+            )
             .await
             .map_err(Error::ark_server)
-            .context("failed to complete payment request")?;
+            .context("failed to submit offchain transaction request")?;
 
-        Ok(redeem_psbt)
+        for checkpoint_psbt in res.signed_checkpoint_txs.iter_mut() {
+            let vtxo_input = vtxo_inputs
+                .iter()
+                .find(|input| {
+                    checkpoint_psbt.unsigned_tx.input[0].previous_output == input.outpoint()
+                })
+                .ok_or_else(|| {
+                    Error::ad_hoc(format!(
+                        "could not find VTXO input for checkpoint transaction {}",
+                        checkpoint_psbt.unsigned_tx.compute_txid(),
+                    ))
+                })?;
+
+            sign_checkpoint_transaction(sign_fn, checkpoint_psbt, vtxo_input)?;
+        }
+
+        self.network_client()
+            .finalize_offchain_transaction(virtual_txid, res.signed_checkpoint_txs)
+            .await
+            .map_err(Error::ark_server)
+            .context("failed to finalize offchain transaction")?;
+
+        Ok(virtual_txid)
     }
 }
