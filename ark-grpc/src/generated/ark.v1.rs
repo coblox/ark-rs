@@ -669,6 +669,15 @@ pub struct RegisterIntentResponse {
     pub request_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteIntentRequest {
+    #[prost(string, tag = "1")]
+    pub request_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub bip322_signature: ::core::option::Option<Bip322Signature>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct DeleteIntentResponse {}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterInputsForNextRoundRequest {
     #[prost(message, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<Input>,
@@ -923,6 +932,21 @@ pub mod ark_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.ArkService", "RegisterIntent"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn delete_intent(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteIntentRequest>,
+        ) -> std::result::Result<tonic::Response<super::DeleteIntentResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static("/ark.v1.ArkService/DeleteIntent");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.ArkService", "DeleteIntent"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn register_inputs_for_next_round(
