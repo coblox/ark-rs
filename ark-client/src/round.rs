@@ -1,6 +1,5 @@
 use crate::error::ErrorContext;
 use crate::utils::sleep;
-use crate::utils::spawn;
 use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use crate::Blockchain;
@@ -20,6 +19,9 @@ use ark_core::server::TxTree;
 use ark_core::ArkAddress;
 use backon::ExponentialBuilder;
 use backon::Retryable;
+use bitcoin::hashes::sha256;
+use bitcoin::hashes::Hash;
+use bitcoin::hex::DisplayHex;
 use bitcoin::key::Keypair;
 use bitcoin::secp256k1;
 use bitcoin::secp256k1::schnorr;
@@ -29,7 +31,6 @@ use bitcoin::Psbt;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
-use futures::FutureExt;
 use futures::StreamExt;
 use jiff::Timestamp;
 use rand::CryptoRng;
@@ -304,15 +305,7 @@ where
             }
         }
 
-        // Depending on whether we are generating new VTXOs or not, we start in a different step of
-        // this state machine.
-        let mut step = match outputs
-            .iter()
-            .any(|o| matches!(o, proof_of_funds::Output::Offchain(_)))
-        {
-            true => RoundStep::Start,
-            false => RoundStep::RoundSigningNoncesGenerated,
-        };
+        let mut step = RoundStep::Start;
 
         let own_cosigner_kps = [own_cosigner_kp];
         let own_cosigner_pks = own_cosigner_kps
@@ -333,42 +326,21 @@ where
             self.kp(),
             sign_for_onchain_pk_fn,
             inputs,
-            outputs,
+            outputs.clone(),
             own_cosigner_pks.clone(),
         )?;
 
-        let request_id = self
+        let intent_id = self
             .network_client()
             .register_intent(&intent_message, &bip322_proof)
             .await?;
 
-        tracing::debug!(request_id, "Registered intent for round");
+        tracing::debug!(intent_id, "Registered intent for round");
 
         let network_client = self.network_client();
 
-        // The protocol expects us to ping the Ark server every 5 seconds to let the server know
-        // that we are still interested in joining the round.
-        //
-        // We generate a `RemoteHandle` so that the ping task is cancelled when the parent function
-        // ends.
-        let (ping_task, _ping_handle) = {
-            let network_client = network_client.clone();
-            async move {
-                loop {
-                    if let Err(e) = network_client.ping(request_id.clone()).await {
-                        tracing::warn!("Error via ping: {e:?}");
-                    }
-
-                    sleep(std::time::Duration::from_millis(5000)).await
-                }
-            }
-        }
-        .remote_handle();
-
-        spawn(ping_task);
-
         let round = network_client.get_round("".to_string()).await?;
-        let round_id = round.map(|r| r.id);
+        let mut round_id = round.map(|r| r.id);
 
         let mut stream = network_client.get_event_stream().await?;
 
@@ -380,8 +352,42 @@ where
         loop {
             match stream.next().await {
                 Some(Ok(event)) => match event {
-                    RoundStreamEvent::RoundSigning(e) => {
+                    RoundStreamEvent::BatchStarted(e) => {
                         if step != RoundStep::Start {
+                            continue;
+                        }
+
+                        let hash = sha256::Hash::hash(intent_id.as_bytes());
+                        let hash = hash.as_byte_array().to_vec().to_lower_hex_string();
+
+                        if e.intent_id_hashes.iter().any(|h| h == &hash) {
+                            self.network_client()
+                                .confirm_registration(intent_id.clone())
+                                .await?;
+
+                            tracing::info!(round_id = e.id, intent_id, "Intent ID found for round");
+
+                            round_id = Some(e.id);
+
+                            // Depending on whether we are generating new VTXOs or not, we continue
+                            // with a different step in the state machine.
+                            step = match outputs
+                                .iter()
+                                .any(|o| matches!(o, proof_of_funds::Output::Offchain(_)))
+                            {
+                                true => RoundStep::BatchStarted,
+                                false => RoundStep::RoundSigningNoncesGenerated,
+                            };
+                        } else {
+                            tracing::debug!(
+                                round_id = e.id,
+                                intent_id,
+                                "Intent ID not found for round"
+                            );
+                        }
+                    }
+                    RoundStreamEvent::RoundSigning(e) => {
+                        if step != RoundStep::BatchStarted {
                             continue;
                         }
 
@@ -569,6 +575,7 @@ where
         #[derive(Debug, PartialEq, Eq)]
         enum RoundStep {
             Start,
+            BatchStarted,
             RoundSigningStarted,
             RoundSigningNoncesGenerated,
             RoundFinalization,
@@ -578,7 +585,8 @@ where
         impl RoundStep {
             fn next(&self) -> RoundStep {
                 match self {
-                    RoundStep::Start => RoundStep::RoundSigningStarted,
+                    RoundStep::Start => RoundStep::BatchStarted,
+                    RoundStep::BatchStarted => RoundStep::RoundSigningStarted,
                     RoundStep::RoundSigningStarted => RoundStep::RoundSigningNoncesGenerated,
                     RoundStep::RoundSigningNoncesGenerated => RoundStep::RoundFinalization,
                     RoundStep::RoundFinalization => RoundStep::Finalized,

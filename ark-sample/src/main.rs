@@ -29,6 +29,9 @@ use ark_core::ArkTransaction;
 use ark_core::BoardingOutput;
 use ark_core::ExplorerUtxo;
 use ark_core::Vtxo;
+use bitcoin::hashes::sha256;
+use bitcoin::hashes::Hash;
+use bitcoin::hex::DisplayHex;
 use bitcoin::key::Keypair;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1;
@@ -458,15 +461,35 @@ async fn settle(
         own_cosigner_pks.clone(),
     )?;
 
-    let request_id = grpc_client
+    let intent_id = grpc_client
         .register_intent(&intent_message, &bip322_proof)
         .await?;
 
-    tracing::info!(request_id, "Registered intent");
-
-    grpc_client.ping(request_id).await?;
+    tracing::info!(intent_id, "Registered intent");
 
     let mut event_stream = grpc_client.get_event_stream().await?;
+
+    let batch_started_event = match event_stream.next().await {
+        Some(Ok(RoundStreamEvent::BatchStarted(e))) => e,
+        other => bail!("Did not get round signing event: {other:?}"),
+    };
+
+    let hash = sha256::Hash::hash(intent_id.as_bytes());
+    let hash = hash.as_byte_array().to_vec().to_lower_hex_string();
+
+    if batch_started_event
+        .intent_id_hashes
+        .iter()
+        .any(|h| h == &hash)
+    {
+        grpc_client.confirm_registration(intent_id.clone()).await?;
+    } else {
+        bail!(
+            "Did not find intent ID {} in round: {}",
+            intent_id,
+            batch_started_event.id
+        )
+    }
 
     let round_signing_event = match event_stream.next().await {
         Some(Ok(RoundStreamEvent::RoundSigning(e))) => e,

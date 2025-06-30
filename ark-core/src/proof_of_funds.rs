@@ -71,6 +71,7 @@ impl Input {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Output {
     /// An output created when boarding.
     Offchain(TxOut),

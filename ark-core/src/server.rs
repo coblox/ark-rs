@@ -1,5 +1,6 @@
 //! Messages exchanged between the client and the Ark server.
 
+use bitcoin::address::NetworkUnchecked;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::Amount;
 use bitcoin::Network;
@@ -88,6 +89,15 @@ pub struct ListVtxo {
 }
 
 #[derive(Debug, Clone)]
+pub struct BatchStartedEvent {
+    pub id: String,
+    pub intent_id_hashes: Vec<String>,
+    // TODO: Perhaps needs to be `bitcoin::Sequence`.
+    pub batch_expiry: i64,
+    pub forfeit_address: bitcoin::Address<NetworkUnchecked>,
+}
+
+#[derive(Debug, Clone)]
 pub struct RoundFinalizationEvent {
     pub id: String,
     pub round_tx: Psbt,
@@ -125,6 +135,7 @@ pub struct RoundSigningNoncesGeneratedEvent {
 
 #[derive(Debug, Clone)]
 pub enum RoundStreamEvent {
+    BatchStarted(BatchStartedEvent),
     RoundFinalization(RoundFinalizationEvent),
     RoundFinalized(RoundFinalizedEvent),
     RoundFailed(RoundFailedEvent),

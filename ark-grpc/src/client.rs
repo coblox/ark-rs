@@ -3,13 +3,13 @@ use crate::generated::ark::v1::ark_service_client::ArkServiceClient;
 use crate::generated::ark::v1::explorer_service_client::ExplorerServiceClient;
 use crate::generated::ark::v1::indexer_service_client::IndexerServiceClient;
 use crate::generated::ark::v1::Bip322Signature;
+use crate::generated::ark::v1::ConfirmRegistrationRequest;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
 use crate::generated::ark::v1::GetRoundRequest;
 use crate::generated::ark::v1::GetTransactionsStreamRequest;
 use crate::generated::ark::v1::ListVtxosRequest;
 use crate::generated::ark::v1::Outpoint;
-use crate::generated::ark::v1::PingRequest;
 use crate::generated::ark::v1::RegisterIntentRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
@@ -17,6 +17,7 @@ use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::tree;
 use crate::Error;
 use ark_core::proof_of_funds;
+use ark_core::server::BatchStartedEvent;
 use ark_core::server::ChainedTx;
 use ark_core::server::ChainedTxType;
 use ark_core::server::FinalizeOffchainTxResponse;
@@ -42,8 +43,10 @@ use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
 use async_stream::stream;
 use base64::Engine;
+use bitcoin::address::NetworkUnchecked;
 use bitcoin::hex::DisplayHex;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::Address;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::Txid;
@@ -257,15 +260,15 @@ impl Client {
         Ok(FinalizeOffchainTxResponse {})
     }
 
-    pub async fn ping(&self, request_id: String) -> Result<(), Error> {
+    pub async fn confirm_registration(&self, intent_id: String) -> Result<String, Error> {
         let mut client = self.inner_ark_client()?;
 
-        client
-            .ping(PingRequest { request_id })
+        let res = client
+            .confirm_registration(ConfirmRegistrationRequest { intent_id })
             .await
-            .map_err(|e| Error::ping(e.message().to_string()))?;
+            .map_err(Error::request)?;
 
-        Ok(())
+        Ok(res.into_inner().blinded_creds)
     }
 
     pub async fn submit_tree_nonces(
@@ -534,6 +537,22 @@ impl TryFrom<generated::ark::v1::Node> for TxTreeNode {
     }
 }
 
+impl TryFrom<generated::ark::v1::BatchStartedEvent> for BatchStartedEvent {
+    type Error = Error;
+
+    fn try_from(value: generated::ark::v1::BatchStartedEvent) -> Result<Self, Self::Error> {
+        let forfeit_address: Address<NetworkUnchecked> =
+            value.forfeit_address.parse().map_err(Error::conversion)?;
+
+        Ok(BatchStartedEvent {
+            id: value.id,
+            intent_id_hashes: value.intent_id_hashes,
+            batch_expiry: value.batch_expiry,
+            forfeit_address,
+        })
+    }
+}
+
 impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEvent {
     type Error = Error;
 
@@ -657,6 +676,9 @@ impl TryFrom<generated::ark::v1::get_event_stream_response::Event> for RoundStre
         value: generated::ark::v1::get_event_stream_response::Event,
     ) -> Result<Self, Self::Error> {
         Ok(match value {
+            generated::ark::v1::get_event_stream_response::Event::BatchStarted(e) => {
+                RoundStreamEvent::BatchStarted(e.try_into()?)
+            }
             generated::ark::v1::get_event_stream_response::Event::RoundFinalization(e) => {
                 RoundStreamEvent::RoundFinalization(e.try_into()?)
             }

@@ -18,7 +18,6 @@ enum Kind {
     NotConnected,
     Request,
     Conversion,
-    Ping,
     EventStreamDisconnect,
     EventStream,
 }
@@ -51,10 +50,6 @@ impl Error {
         Error::new(Kind::Conversion).with(source)
     }
 
-    pub(crate) fn ping(source: impl Into<Source>) -> Self {
-        Error::new(Kind::Ping).with(source)
-    }
-
     pub(crate) fn event_stream_disconnect() -> Self {
         Error::new(Kind::EventStreamDisconnect)
     }
@@ -69,7 +64,6 @@ impl Error {
             Kind::NotConnected => "no connection to Ark server",
             Kind::Request => "request failed",
             Kind::Conversion => "failed to convert between types",
-            Kind::Ping => "error via ping",
             Kind::EventStreamDisconnect => "got disconnected from event stream",
             Kind::EventStream => "error via event stream",
         }
