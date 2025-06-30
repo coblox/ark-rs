@@ -74,6 +74,7 @@ pub fn build_offchain_transactions(
     outputs: &[(&ArkAddress, Amount)],
     change_address: Option<&ArkAddress>,
     vtxo_inputs: &[VtxoInput],
+    dust_limit: Amount,
 ) -> Result<OffchainTransactions, Error> {
     if vtxo_inputs.is_empty() {
         return Err(Error::transaction(
@@ -95,9 +96,18 @@ pub fn build_offchain_transactions(
 
     let mut outputs = outputs
         .iter()
-        .map(|(address, amount)| TxOut {
-            value: *amount,
-            script_pubkey: address.to_p2tr_script_pubkey(),
+        .map(|(address, amount)| {
+            if *amount > dust_limit {
+                TxOut {
+                    value: *amount,
+                    script_pubkey: address.to_p2tr_script_pubkey(),
+                }
+            } else {
+                TxOut {
+                    value: *amount,
+                    script_pubkey: address.to_sub_dust_script_pubkey(),
+                }
+            }
         })
         .collect::<Vec<_>>();
 
@@ -112,10 +122,17 @@ pub fn build_offchain_transactions(
 
     if change_amount > Amount::ZERO {
         if let Some(change_address) = change_address {
-            outputs.push(TxOut {
-                value: change_amount,
-                script_pubkey: change_address.to_p2tr_script_pubkey(),
-            });
+            if change_amount > dust_limit {
+                outputs.push(TxOut {
+                    value: change_amount,
+                    script_pubkey: change_address.to_p2tr_script_pubkey(),
+                })
+            } else {
+                outputs.push(TxOut {
+                    value: change_amount,
+                    script_pubkey: change_address.to_sub_dust_script_pubkey(),
+                })
+            }
         }
     }
 

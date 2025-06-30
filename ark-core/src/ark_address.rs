@@ -17,6 +17,10 @@ impl ArkAddress {
     pub fn to_p2tr_script_pubkey(&self) -> ScriptBuf {
         ScriptBuf::new_p2tr_tweaked(self.vtxo_tap_key)
     }
+
+    pub fn to_sub_dust_script_pubkey(&self) -> ScriptBuf {
+        ScriptBuf::new_op_return(self.vtxo_tap_key.serialize())
+    }
 }
 
 impl ArkAddress {

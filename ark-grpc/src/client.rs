@@ -153,7 +153,7 @@ impl Client {
         // Add them to the list of spent VTXOs.
         spent.append(&mut spent_by_redeem);
 
-        Ok(ListVtxo { spent, spendable })
+        Ok(ListVtxo::new(spent, spendable))
     }
 
     pub async fn register_intent(

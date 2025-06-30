@@ -386,7 +386,7 @@ where
         Ok(vec![address])
     }
 
-    pub async fn list_vtxos(&self) -> Result<ListVtxo, Error> {
+    pub async fn list_vtxos(&self, select_recoverable_vtxos: bool) -> Result<ListVtxo, Error> {
         let addresses = self.get_offchain_addresses()?;
 
         let mut vtxos = ListVtxo {
@@ -397,10 +397,23 @@ where
         for (address, vtxo) in addresses.into_iter() {
             let list = self.network_client().list_vtxos(&address).await?;
 
-            vtxos
-                .spendable
-                .append(&mut vec![(list.spendable, vtxo.clone())]);
-            vtxos.spent.append(&mut vec![(list.spent, vtxo)]);
+            if select_recoverable_vtxos {
+                vtxos
+                    .spendable
+                    .append(&mut vec![(list.spendable_with_recoverable(), vtxo.clone())]);
+
+                vtxos
+                    .spent
+                    .append(&mut vec![(list.spent_without_recoverable(), vtxo.clone())]);
+            } else {
+                vtxos
+                    .spendable
+                    .append(&mut vec![(list.spendable().to_vec(), vtxo.clone())]);
+
+                vtxos
+                    .spent
+                    .append(&mut vec![(list.spent().to_vec(), vtxo.clone())]);
+            }
         }
 
         Ok(vtxos)
@@ -426,12 +439,15 @@ where
         Ok(Some(vtxo_chain))
     }
 
-    pub async fn spendable_vtxos(&self) -> Result<Vec<(Vec<VtxoOutPoint>, Vtxo)>, Error> {
+    pub async fn spendable_vtxos(
+        &self,
+        select_recoverable_vtxos: bool,
+    ) -> Result<Vec<(Vec<VtxoOutPoint>, Vtxo)>, Error> {
         let now = Timestamp::now();
 
         let mut spendable = vec![];
 
-        let vtxos = self.list_vtxos().await?;
+        let vtxos = self.list_vtxos(select_recoverable_vtxos).await?;
         for (virtual_tx_outpoints, vtxo) in vtxos.spendable {
             let explorer_utxos = self.blockchain().find_outpoints(vtxo.address()).await?;
 
@@ -468,7 +484,9 @@ where
     }
 
     pub async fn offchain_balance(&self) -> Result<OffChainBalance, Error> {
-        let list = self.spendable_vtxos().await?;
+        // We should not include recoverable VTXOS in the spendable balance because they cannot be
+        // spent until they are claimed.
+        let list = self.spendable_vtxos(false).await?;
         let sum =
             list.iter()
                 .flat_map(|(vtxos, _)| vtxos)
@@ -520,7 +538,7 @@ where
             }
         }
 
-        let vtxos = self.list_vtxos().await?;
+        let vtxos = self.list_vtxos(true).await?;
 
         let incoming_transactions = generate_incoming_vtxo_transaction_history(
             &vtxos.spent_outpoints(),

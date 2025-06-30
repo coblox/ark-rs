@@ -91,14 +91,16 @@ pub struct VtxoInput {
     amount: Amount,
     /// Where the VTXO would end up on the blockchain if it were to become a UTXO.
     outpoint: OutPoint,
+    is_recoverable: bool,
 }
 
 impl VtxoInput {
-    pub fn new(vtxo: Vtxo, amount: Amount, outpoint: OutPoint) -> Self {
+    pub fn new(vtxo: Vtxo, amount: Amount, outpoint: OutPoint, is_recoverable: bool) -> Self {
         Self {
             vtxo,
             amount,
             outpoint,
+            is_recoverable,
         }
     }
 
@@ -405,8 +407,14 @@ pub fn create_and_sign_forfeit_txs(
         vtxo,
         amount: vtxo_amount,
         outpoint: vtxo_outpoint,
+        is_recoverable,
     } in vtxo_inputs.iter()
     {
+        if *is_recoverable {
+            // Recoverable VTXOs don't need to be forfeited.
+            continue;
+        }
+
         let connector_outpoint = connector_index.get(vtxo_outpoint).ok_or_else(|| {
             Error::ad_hoc(format!(
                 "connector outpoint missing for VTXO outpoint {vtxo_outpoint}"

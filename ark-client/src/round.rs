@@ -44,15 +44,16 @@ where
 {
     /// Lift all pending VTXOs and boarding outputs into the Ark, converting them into new,
     /// confirmed VTXOs. We do this by "joining the next round".
-    pub async fn board<R>(&self, rng: &mut R) -> Result<(), Error>
+    pub async fn board<R>(&self, rng: &mut R, select_recoverable_vtxos: bool) -> Result<(), Error>
     where
         R: Rng + CryptoRng + Clone,
     {
         // Get off-chain address and send all funds to this address, no change output 🦄
         let (to_address, _) = self.get_offchain_address()?;
 
-        let (boarding_inputs, vtxo_inputs, total_amount) =
-            self.fetch_round_transaction_inputs().await?;
+        let (boarding_inputs, vtxo_inputs, total_amount) = self
+            .fetch_round_transaction_inputs(select_recoverable_vtxos)
+            .await?;
 
         tracing::debug!(
             offchain_adress = %to_address.encode(),
@@ -101,14 +102,16 @@ where
         rng: &mut R,
         to_address: Address,
         to_amount: Amount,
+        select_recoverable_vtxos: bool,
     ) -> Result<Txid, Error>
     where
         R: Rng + CryptoRng + Clone,
     {
         let (change_address, _) = self.get_offchain_address()?;
 
-        let (boarding_inputs, vtxo_inputs, total_amount) =
-            self.fetch_round_transaction_inputs().await?;
+        let (boarding_inputs, vtxo_inputs, total_amount) = self
+            .fetch_round_transaction_inputs(select_recoverable_vtxos)
+            .await?;
 
         let change_amount = total_amount.checked_sub(to_amount).ok_or_else(|| {
             Error::coin_select("cannot afford to send {to_amount}, only have {total_amount}")
@@ -158,6 +161,7 @@ where
     /// upcoming round.
     async fn fetch_round_transaction_inputs(
         &self,
+        select_recoverable_vtxos: bool,
     ) -> Result<(Vec<round::OnChainInput>, Vec<round::VtxoInput>, Amount), Error> {
         // Get all known boarding outputs.
         let boarding_outputs = self.inner.wallet.get_boarding_outputs()?;
@@ -198,7 +202,7 @@ where
             }
         }
 
-        let spendable_vtxos = self.spendable_vtxos().await?;
+        let spendable_vtxos = self.spendable_vtxos(select_recoverable_vtxos).await?;
 
         for (vtxo_outpoints, _) in spendable_vtxos.iter() {
             total_amount += vtxo_outpoints
@@ -216,6 +220,7 @@ where
                             vtxo.clone(),
                             vtxo_outpoint.amount,
                             vtxo_outpoint.outpoint,
+                            vtxo_outpoint.is_recoverable(),
                         )
                     })
                     .collect::<Vec<_>>()

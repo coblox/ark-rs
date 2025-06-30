@@ -65,6 +65,12 @@ pub struct VtxoOutPoint {
     pub created_at: i64,
 }
 
+impl VtxoOutPoint {
+    pub fn is_recoverable(&self) -> bool {
+        self.swept && !self.spent
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Info {
     pub pk: PublicKey,
@@ -84,8 +90,45 @@ pub struct Info {
 
 #[derive(Clone, Debug)]
 pub struct ListVtxo {
-    pub spent: Vec<VtxoOutPoint>,
-    pub spendable: Vec<VtxoOutPoint>,
+    spent: Vec<VtxoOutPoint>,
+    spendable: Vec<VtxoOutPoint>,
+}
+
+impl ListVtxo {
+    pub fn new(spent: Vec<VtxoOutPoint>, spendable: Vec<VtxoOutPoint>) -> Self {
+        Self { spent, spendable }
+    }
+
+    pub fn spent(&self) -> &[VtxoOutPoint] {
+        &self.spent
+    }
+
+    pub fn spent_without_recoverable(&self) -> Vec<VtxoOutPoint> {
+        self.spent
+            .iter()
+            .filter(|v| !v.is_recoverable())
+            .cloned()
+            .collect()
+    }
+
+    pub fn spendable(&self) -> &[VtxoOutPoint] {
+        &self.spendable
+    }
+
+    pub fn spendable_with_recoverable(&self) -> Vec<VtxoOutPoint> {
+        let mut spendable = self.spendable.clone();
+
+        let mut recoverable_vtxos = Vec::new();
+        for spent_vtxo in self.spent.iter() {
+            if spent_vtxo.is_recoverable() {
+                recoverable_vtxos.push(spent_vtxo.clone());
+            }
+        }
+
+        spendable.append(&mut recoverable_vtxos);
+
+        spendable
+    }
 }
 
 #[derive(Debug, Clone)]

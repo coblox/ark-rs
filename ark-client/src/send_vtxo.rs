@@ -24,8 +24,11 @@ where
     W: BoardingWallet + OnchainWallet,
 {
     pub async fn send_vtxo(&self, address: ArkAddress, amount: Amount) -> Result<Txid, Error> {
+        // Recoverable VTXOs cannot be sent.
+        let select_recoverable_vtxos = false;
+
         let spendable_vtxos = self
-            .spendable_vtxos()
+            .spendable_vtxos(select_recoverable_vtxos)
             .await
             .context("failed to get spendable VTXOs")?;
 
@@ -72,8 +75,13 @@ where
         let OffchainTransactions {
             mut virtual_tx,
             checkpoint_txs,
-        } = build_offchain_transactions(&[(&address, amount)], Some(&change_address), &vtxo_inputs)
-            .map_err(Error::from)?;
+        } = build_offchain_transactions(
+            &[(&address, amount)],
+            Some(&change_address),
+            &vtxo_inputs,
+            self.server_info.dust,
+        )
+        .map_err(Error::from)?;
 
         let sign_fn =
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {

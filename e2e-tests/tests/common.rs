@@ -384,7 +384,7 @@ pub async fn wait_until_balance(
     confirmed_target: Amount,
     pending_target: Amount,
 ) {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let offchain_balance = client.offchain_balance().await.unwrap();
 

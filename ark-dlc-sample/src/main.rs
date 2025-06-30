@@ -157,6 +157,7 @@ async fn main() -> Result<()> {
         )],
         None,
         &[alice_dlc_input.clone(), bob_dlc_input.clone()],
+        server_info.dust,
     )
     .context("building DLC TX")?;
 
@@ -196,6 +197,7 @@ async fn main() -> Result<()> {
         ],
         None,
         &[dlc_vtxo_input.clone()],
+        server_info.dust,
     )
     .context("building refund TX")?;
 
@@ -209,6 +211,7 @@ async fn main() -> Result<()> {
         ],
         None,
         &[dlc_vtxo_input.clone()],
+        server_info.dust,
     )
     .context("building heads CET")?;
 
@@ -221,6 +224,7 @@ async fn main() -> Result<()> {
         ],
         None,
         &[dlc_vtxo_input.clone()],
+        server_info.dust,
     )
     .context("building tails CET")?;
 
@@ -629,7 +633,7 @@ async fn fund_vtxo(
 
     let vtxo_list = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
     let virtual_tx_outpoint = vtxo_list
-        .spendable
+        .spendable()
         .iter()
         .find(|v| v.round_txid == round_txid)
         .ok_or(anyhow!("could not find input in round"))?;
@@ -1311,7 +1315,14 @@ async fn settle(
     let vtxo_inputs = virtual_tx_outpoints
         .spendable
         .into_iter()
-        .map(|(outpoint, vtxo)| round::VtxoInput::new(vtxo, outpoint.amount, outpoint.outpoint))
+        .map(|(outpoint, vtxo)| {
+            round::VtxoInput::new(
+                vtxo,
+                outpoint.amount,
+                outpoint.outpoint,
+                outpoint.is_recoverable(),
+            )
+        })
         .collect::<Vec<_>>();
 
     let signed_forfeit_psbts = create_and_sign_forfeit_txs(
@@ -1372,7 +1383,7 @@ async fn spendable_vtxos(
         // The VTXOs for the given Ark address that the Ark server tells us about.
         let vtxo_outpoints = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
 
-        spendable_vtxos.insert(vtxo.clone(), vtxo_outpoints.spendable);
+        spendable_vtxos.insert(vtxo.clone(), vtxo_outpoints.spendable().to_vec());
     }
 
     Ok(spendable_vtxos)

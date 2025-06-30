@@ -35,8 +35,11 @@ where
     /// commitment transaction output to a spendable VTXO. Every transaction is fully signed,
     /// but requires fee bumping through a P2A output.
     pub async fn build_unilateral_exit_trees(&self) -> Result<Vec<Vec<Transaction>>, Error> {
+        // Recoverable VTXOs cannot be unilaterally claimed.
+        let select_recoverable_vtxos = false;
+
         let spendable_vtxos = self
-            .spendable_vtxos()
+            .spendable_vtxos(select_recoverable_vtxos)
             .await
             .context("failed to get spendable VTXOs")?;
 

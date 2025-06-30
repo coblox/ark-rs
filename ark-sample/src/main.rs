@@ -172,7 +172,7 @@ async fn main() -> Result<()> {
     match &cli.command {
         Commands::Balance => {
             let virtual_tx_outpoints = {
-                let spendable_vtxos = spendable_vtxos(&grpc_client, &[vtxo]).await?;
+                let spendable_vtxos = spendable_vtxos(&grpc_client, &[vtxo], false).await?;
                 list_virtual_tx_outpoints(find_outpoints_fn, spendable_vtxos)?
             };
             let boarding_outpoints =
@@ -221,7 +221,7 @@ async fn main() -> Result<()> {
             let amount = Amount::from_sat(*amount);
 
             let virtual_tx_outpoints = {
-                let spendable_vtxos = spendable_vtxos(&grpc_client, &[vtxo.clone()]).await?;
+                let spendable_vtxos = spendable_vtxos(&grpc_client, &[vtxo.clone()], false).await?;
                 list_virtual_tx_outpoints(find_outpoints_fn, spendable_vtxos)?
             };
 
@@ -262,6 +262,7 @@ async fn main() -> Result<()> {
                 &[(&address.0, amount)],
                 Some(&change_address),
                 &vtxo_inputs,
+                server_info.dust,
             )?;
 
             let sign_fn =
@@ -325,7 +326,7 @@ async fn main() -> Result<()> {
         }
         Commands::Settle => {
             let virtual_tx_outpoints = {
-                let spendable_vtxos = spendable_vtxos(&grpc_client, &[vtxo.clone()]).await?;
+                let spendable_vtxos = spendable_vtxos(&grpc_client, &[vtxo.clone()], true).await?;
                 list_virtual_tx_outpoints(find_outpoints_fn, spendable_vtxos)?
             };
             let boarding_outpoints =
@@ -363,13 +364,20 @@ async fn main() -> Result<()> {
 async fn spendable_vtxos(
     grpc_client: &ark_grpc::Client,
     vtxos: &[Vtxo],
+    select_recoverable_vtxos: bool,
 ) -> Result<HashMap<Vtxo, Vec<VtxoOutPoint>>> {
     let mut spendable_vtxos = HashMap::new();
     for vtxo in vtxos.iter() {
         // The VTXOs for the given Ark address that the Ark server tells us about.
         let vtxo_outpoints = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
 
-        spendable_vtxos.insert(vtxo.clone(), vtxo_outpoints.spendable);
+        let spendable = if select_recoverable_vtxos {
+            vtxo_outpoints.spendable_with_recoverable()
+        } else {
+            vtxo_outpoints.spendable().to_vec()
+        };
+
+        spendable_vtxos.insert(vtxo.clone(), spendable);
     }
 
     Ok(spendable_vtxos)
@@ -560,7 +568,14 @@ async fn settle(
     let vtxo_inputs = vtxos
         .spendable
         .into_iter()
-        .map(|(outpoint, vtxo)| round::VtxoInput::new(vtxo, outpoint.amount, outpoint.outpoint))
+        .map(|(outpoint, vtxo)| {
+            round::VtxoInput::new(
+                vtxo,
+                outpoint.amount,
+                outpoint.outpoint,
+                outpoint.is_recoverable(),
+            )
+        })
         .collect::<Vec<_>>();
 
     let signed_forfeit_psbts = create_and_sign_forfeit_txs(
@@ -736,16 +751,21 @@ async fn transaction_history(
     for vtxo in vtxos.iter() {
         let vtxos = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
 
+        let spent = vtxos.spent();
+        // We should not include recoverable VTXOS in the spendable balance because they cannot be
+        // spent until they are claimed.
+        let spendable = vtxos.spendable();
+
         let mut new_incoming_transactions = generate_incoming_vtxo_transaction_history(
-            &vtxos.spent,
-            &vtxos.spendable,
+            spent,
+            spendable,
             &boarding_round_transactions,
         )?;
 
         incoming_transactions.append(&mut new_incoming_transactions);
 
         let mut new_outgoing_transactions =
-            generate_outgoing_vtxo_transaction_history(&vtxos.spent, &vtxos.spendable)?;
+            generate_outgoing_vtxo_transaction_history(spent, spendable)?;
 
         outgoing_transactions.append(&mut new_outgoing_transactions);
     }
