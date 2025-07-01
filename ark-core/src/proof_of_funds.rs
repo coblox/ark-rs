@@ -31,7 +31,6 @@ use bitcoin::Txid;
 use bitcoin::Witness;
 use bitcoin::XOnlyPublicKey;
 use serde::Serialize;
-use serde::Serializer;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -141,10 +140,7 @@ where
         onchain_output_indexes,
         valid_at: now,
         expire_at,
-        musig2_data: Musig2Data {
-            own_cosigner_pks,
-            signing_type: SigningType::SignBranch,
-        },
+        own_cosigner_pks,
     };
 
     let (mut proof_psbt, fake_input) = build_proof_psbt(&intent_message, &inputs, &outputs)?;
@@ -381,7 +377,8 @@ pub struct IntentMessage {
     valid_at: u64,
     // The time when this intent message is no longer valid.
     expire_at: u64,
-    musig2_data: Musig2Data,
+    #[serde(rename = "cosigners_public_keys")]
+    own_cosigner_pks: Vec<PublicKey>,
 }
 
 impl IntentMessage {
@@ -398,30 +395,6 @@ impl IntentMessage {
 pub enum IntentMessageType {
     Register,
     Delete,
-}
-
-#[derive(Serialize)]
-struct Musig2Data {
-    #[serde(rename = "cosigners_public_keys")]
-    own_cosigner_pks: Vec<PublicKey>,
-    signing_type: SigningType,
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-enum SigningType {
-    #[allow(dead_code)]
-    SignAll = 0,
-    SignBranch = 1,
-}
-
-impl Serialize for SigningType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u8(*self as u8)
-    }
 }
 
 mod taptree {

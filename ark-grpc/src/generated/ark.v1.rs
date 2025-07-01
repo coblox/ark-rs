@@ -168,9 +168,7 @@ pub struct TxRequestInfo {
     pub inputs: ::prost::alloc::vec::Vec<RequestInput>,
     #[prost(message, repeated, tag = "5")]
     pub boarding_inputs: ::prost::alloc::vec::Vec<RequestInput>,
-    #[prost(string, tag = "6")]
-    pub signing_type: ::prost::alloc::string::String,
-    #[prost(string, repeated, tag = "7")]
+    #[prost(string, repeated, tag = "6")]
     pub cosigners_public_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -739,21 +737,15 @@ pub struct ConfirmRegistrationResponse {
     pub blinded_creds: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Musig2 {
-    #[prost(string, repeated, tag = "1")]
-    pub cosigners_public_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(bool, tag = "2")]
-    pub signing_all: bool,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterOutputsForNextRoundRequest {
     #[prost(string, tag = "1")]
     pub request_id: ::prost::alloc::string::String,
     /// List of receivers for to convert to leaves in the next VTXO tree.
     #[prost(message, repeated, tag = "2")]
     pub outputs: ::prost::alloc::vec::Vec<Output>,
-    #[prost(message, optional, tag = "3")]
-    pub musig2: ::core::option::Option<Musig2>,
+    /// set only if offchain outputs
+    #[prost(string, repeated, tag = "3")]
+    pub cosigners_public_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct RegisterOutputsForNextRoundResponse {}
@@ -1957,20 +1949,6 @@ pub struct GetSweptCommitmentTxResponse {
     #[prost(string, repeated, tag = "1")]
     pub swept_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubscribeForAddressesRequest {
-    #[prost(string, repeated, tag = "1")]
-    pub addresses: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubscribeForAddressesResponse {
-    #[prost(string, tag = "1")]
-    pub address: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "2")]
-    pub new_vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
-    #[prost(message, repeated, tag = "3")]
-    pub spent_vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
-}
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct IndexerBatch {
     #[prost(uint64, tag = "1")]
@@ -2079,6 +2057,45 @@ pub struct IndexerPageResponse {
     pub next: i32,
     #[prost(int32, tag = "3")]
     pub total: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubscribeForScriptsRequest {
+    #[prost(string, repeated, tag = "1")]
+    pub scripts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// if set, update an existing subscription
+    #[prost(string, tag = "2")]
+    pub subscription_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubscribeForScriptsResponse {
+    #[prost(string, tag = "1")]
+    pub subscription_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnsubscribeForScriptsRequest {
+    #[prost(string, tag = "1")]
+    pub subscription_id: ::prost::alloc::string::String,
+    /// if empty, unsubscribe all scripts
+    #[prost(string, repeated, tag = "2")]
+    pub scripts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct UnsubscribeForScriptsResponse {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSubscriptionRequest {
+    #[prost(string, tag = "1")]
+    pub subscription_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSubscriptionResponse {
+    #[prost(string, tag = "1")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub scripts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "3")]
+    pub new_vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
+    #[prost(message, repeated, tag = "4")]
+    pub spent_vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2424,6 +2441,61 @@ pub mod indexer_service_client {
                 "GetSweptCommitmentTx",
             ));
             self.inner.unary(req, path, codec).await
+        }
+        pub async fn subscribe_for_scripts(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SubscribeForScriptsRequest>,
+        ) -> std::result::Result<tonic::Response<super::SubscribeForScriptsResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/SubscribeForScripts");
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.IndexerService",
+                "SubscribeForScripts",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn unsubscribe_for_scripts(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UnsubscribeForScriptsRequest>,
+        ) -> std::result::Result<tonic::Response<super::UnsubscribeForScriptsResponse>, tonic::Status>
+        {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/ark.v1.IndexerService/UnsubscribeForScripts",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "ark.v1.IndexerService",
+                "UnsubscribeForScripts",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_subscription(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetSubscriptionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::GetSubscriptionResponse>>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/ark.v1.IndexerService/GetSubscription");
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("ark.v1.IndexerService", "GetSubscription"));
+            self.inner.server_streaming(req, path, codec).await
         }
     }
 }
