@@ -1,7 +1,6 @@
 //! Messages exchanged between the client and the Ark server.
 
 use crate::Error;
-use bitcoin::address::NetworkUnchecked;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::taproot::Signature;
 use bitcoin::Amount;
@@ -175,7 +174,6 @@ pub struct BatchStartedEvent {
     pub intent_id_hashes: Vec<String>,
     // TODO: Perhaps needs to be `bitcoin::Sequence`.
     pub batch_expiry: i64,
-    pub forfeit_address: bitcoin::Address<NetworkUnchecked>,
 }
 
 #[derive(Debug, Clone)]

@@ -45,12 +45,10 @@ use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
 use async_stream::stream;
 use base64::Engine;
-use bitcoin::address::NetworkUnchecked;
 use bitcoin::hex::DisplayHex;
 use bitcoin::hex::FromHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::taproot::Signature;
-use bitcoin::Address;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
 use bitcoin::Txid;
@@ -537,14 +535,10 @@ impl TryFrom<generated::ark::v1::BatchStartedEvent> for BatchStartedEvent {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::BatchStartedEvent) -> Result<Self, Self::Error> {
-        let forfeit_address: Address<NetworkUnchecked> =
-            value.forfeit_address.parse().map_err(Error::conversion)?;
-
         Ok(BatchStartedEvent {
             id: value.id,
             intent_id_hashes: value.intent_id_hashes,
             batch_expiry: value.batch_expiry,
-            forfeit_address,
         })
     }
 }

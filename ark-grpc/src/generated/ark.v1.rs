@@ -188,8 +188,6 @@ pub struct BatchStartedEvent {
     pub intent_id_hashes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(int64, tag = "3")]
     pub batch_expiry: i64,
-    #[prost(string, tag = "4")]
-    pub forfeit_address: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RoundFinalizationEvent {
