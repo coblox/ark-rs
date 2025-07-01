@@ -63,7 +63,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - name: Running cargo tests
-        run: RUST_BACKTRACE=1 cargo test --workspace --exclude e2e-tests ark-rust-secp256k1-zkp
+        run: RUST_BACKTRACE=1 cargo test --workspace --exclude ark-secp256k1
 
   e2e-tests:
     needs: [ clippy ]

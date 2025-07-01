@@ -38,7 +38,7 @@ where
             .flat_map(|(vtxos, _)| vtxos.clone())
             .map(|vtxo| ark_core::coin_select::VtxoOutPoint {
                 outpoint: vtxo.outpoint,
-                expire_at: vtxo.expire_at,
+                expire_at: vtxo.expires_at,
                 amount: vtxo.amount,
             })
             .collect::<Vec<_>>();

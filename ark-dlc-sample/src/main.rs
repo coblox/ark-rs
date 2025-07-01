@@ -638,7 +638,7 @@ async fn fund_vtxo(
     let virtual_tx_outpoint = vtxo_list
         .spendable()
         .iter()
-        .find(|v| v.round_txid == round_txid)
+        .find(|v| v.commitment_txid == round_txid)
         .ok_or(anyhow!("could not find input in round"))?;
     let vtxo_input = redeem::VtxoInput::new(
         vtxo,
@@ -1251,7 +1251,7 @@ async fn settle(
     let round_signing_event;
     loop {
         match event_stream.next().await {
-            Some(Ok(RoundStreamEvent::BatchTree(e))) => {
+            Some(Ok(RoundStreamEvent::TreeTx(e))) => {
                 if let Some(tree_node) = e.tree_tx {
                     let level = tree_node.level as usize;
                     let level_index = tree_node.level_index as usize;
@@ -1265,7 +1265,7 @@ async fn settle(
                     }
                 }
             }
-            Some(Ok(RoundStreamEvent::RoundSigning(e))) => {
+            Some(Ok(RoundStreamEvent::TreeSigningStarted(e))) => {
                 round_signing_event = e;
                 break;
             }
@@ -1292,7 +1292,7 @@ async fn settle(
         .await?;
 
     let round_signing_nonces_generated_event = match event_stream.next().await {
-        Some(Ok(RoundStreamEvent::RoundSigningNoncesGenerated(e))) => e,
+        Some(Ok(RoundStreamEvent::TreeNoncesAggregated(e))) => e,
         other => bail!("Did not get round signing nonces generated event: {other:?}"),
     };
 
@@ -1325,7 +1325,7 @@ async fn settle(
     let round_finalization_event;
     loop {
         match event_stream.next().await {
-            Some(Ok(RoundStreamEvent::BatchTree(e))) => {
+            Some(Ok(RoundStreamEvent::TreeTx(e))) => {
                 if let Some(tree_node) = e.tree_tx {
                     let level = tree_node.level as usize;
                     let level_index = tree_node.level_index as usize;
@@ -1339,7 +1339,7 @@ async fn settle(
                     }
                 }
             }
-            Some(Ok(RoundStreamEvent::BatchTreeSignature(e))) => {
+            Some(Ok(RoundStreamEvent::TreeSignature(e))) => {
                 let level = e.level as usize;
                 let level_index = e.level_index as usize;
                 match e.batch_tree_event_type {
@@ -1353,7 +1353,7 @@ async fn settle(
                     }
                 }
             }
-            Some(Ok(RoundStreamEvent::RoundFinalization(e))) => {
+            Some(Ok(RoundStreamEvent::BatchFinalization(e))) => {
                 round_finalization_event = e;
                 break;
             }
@@ -1400,7 +1400,7 @@ async fn settle(
     let round_psbt = if n_round_inputs == 0 {
         None
     } else {
-        let mut round_psbt = round_finalization_event.round_tx;
+        let mut round_psbt = round_finalization_event.commitment_tx;
 
         let sign_for_pk_fn = |_: &XOnlyPublicKey,
                               msg: &secp256k1::Message|
@@ -1418,7 +1418,7 @@ async fn settle(
         .await?;
 
     let round_finalized_event = match event_stream.next().await {
-        Some(Ok(RoundStreamEvent::RoundFinalized(e))) => e,
+        Some(Ok(RoundStreamEvent::BatchFinalized(e))) => e,
         other => bail!("Did not get round finalized event: {other:?}"),
     };
 
@@ -1426,7 +1426,7 @@ async fn settle(
 
     tracing::info!(round_id, "Round finalized");
 
-    Ok(Some(round_finalized_event.round_txid))
+    Ok(Some(round_finalized_event.commitment_txid))
 }
 
 async fn spendable_vtxos(

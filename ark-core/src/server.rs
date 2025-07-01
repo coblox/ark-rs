@@ -88,23 +88,23 @@ pub struct Round {
 #[derive(Clone, Debug, PartialEq)]
 pub struct VtxoOutPoint {
     pub outpoint: OutPoint,
-    pub spent: bool,
-    pub round_txid: Txid,
-    pub spent_by: Option<Txid>,
-    pub expire_at: i64,
-    pub swept: bool,
-    pub is_pending: bool,
-    /// The redeem transaction which has this [`VtxoOutPoint`] as an output. The TXID matches the
-    /// TXID of the `outpoint` field.
-    pub redeem_tx: Option<Psbt>,
-    pub amount: Amount,
-    pub pubkey: String,
     pub created_at: i64,
+    pub expires_at: i64,
+    pub amount: Amount,
+    pub script: String,
+    /// A pre-confirmed VTXO spends from another VTXO and is not a leaf of the original VTXO tree
+    /// in a batch.
+    pub is_preconfirmed: bool,
+    pub is_swept: bool,
+    pub is_redeemed: bool,
+    pub is_spent: bool,
+    pub spent_by: Option<Txid>,
+    pub commitment_txid: Txid,
 }
 
 impl VtxoOutPoint {
     pub fn is_recoverable(&self) -> bool {
-        self.swept && !self.spent
+        self.is_swept && !self.is_spent
     }
 }
 
@@ -177,40 +177,40 @@ pub struct BatchStartedEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct RoundFinalizationEvent {
+pub struct BatchFinalizationEvent {
     pub id: String,
-    pub round_tx: Psbt,
+    pub commitment_tx: Psbt,
     /// The key is the VTXO outpoint; the value is the corresponding connector outpoint.
     pub connectors_index: HashMap<OutPoint, OutPoint>,
 }
 
 #[derive(Debug, Clone)]
-pub struct RoundFinalizedEvent {
+pub struct BatchFinalizedEvent {
     pub id: String,
-    pub round_txid: Txid,
+    pub commitment_txid: Txid,
 }
 
 #[derive(Debug, Clone)]
-pub struct RoundFailedEvent {
+pub struct BatchFailed {
     pub id: String,
     pub reason: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct RoundSigningEvent {
+pub struct TreeSigningStartedEvent {
     pub id: String,
     pub cosigners_pubkeys: Vec<PublicKey>,
     pub unsigned_round_tx: Psbt,
 }
 
 #[derive(Debug, Clone)]
-pub struct RoundSigningNoncesGeneratedEvent {
+pub struct TreeNoncesAggregatedEvent {
     pub id: String,
     pub tree_nonces: Vec<Vec<Option<musig::PublicNonce>>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct BatchTreeEvent {
+pub struct TreeTxEvent {
     pub id: String,
     pub topic: Vec<String>,
     pub batch_tree_event_type: BatchTreeEventType,
@@ -218,7 +218,7 @@ pub struct BatchTreeEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct BatchTreeSignatureEvent {
+pub struct TreeSignatureEvent {
     pub id: String,
     pub topic: Vec<String>,
     pub batch_tree_event_type: BatchTreeEventType,
@@ -236,17 +236,17 @@ pub enum BatchTreeEventType {
 #[derive(Debug, Clone)]
 pub enum RoundStreamEvent {
     BatchStarted(BatchStartedEvent),
-    RoundFinalization(RoundFinalizationEvent),
-    RoundFinalized(RoundFinalizedEvent),
-    RoundFailed(RoundFailedEvent),
-    RoundSigning(RoundSigningEvent),
-    RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
-    BatchTree(BatchTreeEvent),
-    BatchTreeSignature(BatchTreeSignatureEvent),
+    BatchFinalization(BatchFinalizationEvent),
+    BatchFinalized(BatchFinalizedEvent),
+    BatchFailed(BatchFailed),
+    TreeSigningStarted(TreeSigningStartedEvent),
+    TreeNoncesAggregated(TreeNoncesAggregatedEvent),
+    TreeTx(TreeTxEvent),
+    TreeSignature(TreeSignatureEvent),
 }
 
 pub enum TransactionEvent {
-    Round(RoundTransaction),
+    Round(CommitmentTransaction),
     Redeem(RedeemTransaction),
 }
 
@@ -256,11 +256,10 @@ pub struct RedeemTransaction {
     pub spendable_vtxos: Vec<VtxoOutPoint>,
 }
 
-pub struct RoundTransaction {
+pub struct CommitmentTransaction {
     pub txid: Txid,
     pub spent_vtxos: Vec<VtxoOutPoint>,
     pub spendable_vtxos: Vec<VtxoOutPoint>,
-    pub claimed_boarding_utxos: Vec<OutPoint>,
 }
 
 pub struct VtxoChains {

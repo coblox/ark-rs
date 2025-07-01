@@ -102,7 +102,7 @@ pub async fn concurrent_boarding() {
 
     // FIXME: We should not need to sleep here. We were running into an error when finalising the
     // offchain transaction: the virtual TXID could not be found in the DB.
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     bob.send_vtxo(claire_offchain_address, bob_to_claire_send_amount)
         .await
@@ -110,7 +110,7 @@ pub async fn concurrent_boarding() {
 
     // FIXME: We should not need to sleep here. We were running into an error when finalising the
     // offchain transaction: the virtual TXID could not be found in the DB.
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     claire
         .send_vtxo(alice_offchain_address, claire_to_alice_send_amount)
@@ -131,8 +131,8 @@ pub async fn concurrent_boarding() {
     .await;
     wait_until_balance(
         &claire,
-        Amount::ZERO,
-        claire_fund_amount - claire_to_alice_send_amount + bob_to_claire_send_amount,
+        claire_fund_amount,
+        bob_to_claire_send_amount - claire_to_alice_send_amount,
     )
     .await;
 

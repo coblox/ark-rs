@@ -251,6 +251,12 @@ where
         // Generate an (ephemeral) cosigner keypair.
         let own_cosigner_kp = Keypair::new(self.secp(), rng);
 
+        let onchain_input_outpoints = onchain_inputs
+            .iter()
+            .map(|i| i.outpoint())
+            .collect::<Vec<_>>();
+        let vtxo_input_outpoints = vtxo_inputs.iter().map(|i| i.outpoint()).collect::<Vec<_>>();
+
         let inputs = {
             let boarding_inputs = onchain_inputs.clone().into_iter().map(|o| {
                 proof_of_funds::Input::new(
@@ -342,12 +348,17 @@ where
             .register_intent(&intent_message, &bip322_proof)
             .await?;
 
-        tracing::debug!(intent_id, "Registered intent for round");
+        tracing::debug!(
+            intent_id,
+            ?onchain_input_outpoints,
+            ?vtxo_input_outpoints,
+            ?outputs,
+            "Registered intent for round"
+        );
 
         let network_client = self.network_client();
 
-        let round = network_client.get_round("".to_string()).await?;
-        let mut round_id = round.map(|r| r.id);
+        let mut round_id: Option<String> = None;
 
         let mut stream = network_client.get_event_stream().await?;
 
@@ -394,7 +405,7 @@ where
                             );
                         }
                     }
-                    RoundStreamEvent::BatchTree(e) => {
+                    RoundStreamEvent::TreeTx(e) => {
                         if step != RoundStep::BatchStarted
                             && step != RoundStep::RoundSigningNoncesGenerated
                         {
@@ -414,7 +425,7 @@ where
                             }
                         }
                     }
-                    RoundStreamEvent::BatchTreeSignature(e) => {
+                    RoundStreamEvent::TreeSignature(e) => {
                         if step != RoundStep::RoundSigningNoncesGenerated {
                             continue;
                         }
@@ -434,7 +445,7 @@ where
                             }
                         }
                     }
-                    RoundStreamEvent::RoundSigning(e) => {
+                    RoundStreamEvent::TreeSigningStarted(e) => {
                         if step != RoundStep::BatchStarted {
                             continue;
                         }
@@ -487,7 +498,7 @@ where
                         step = step.next();
                         continue;
                     }
-                    RoundStreamEvent::RoundSigningNoncesGenerated(e) => {
+                    RoundStreamEvent::TreeNoncesAggregated(e) => {
                         if step != RoundStep::RoundSigningStarted {
                             continue;
                         }
@@ -534,7 +545,7 @@ where
 
                         step = step.next();
                     }
-                    RoundStreamEvent::RoundFinalization(e) => {
+                    RoundStreamEvent::BatchFinalization(e) => {
                         if step != RoundStep::RoundSigningNoncesGenerated {
                             continue;
                         }
@@ -553,7 +564,7 @@ where
                         let round_psbt = if onchain_inputs.is_empty() {
                             None
                         } else {
-                            let mut round_psbt = e.round_tx;
+                            let mut round_psbt = e.commitment_tx;
 
                             let sign_for_pk_fn = |pk: &XOnlyPublicKey,
                                                   msg: &secp256k1::Message|
@@ -579,21 +590,21 @@ where
 
                         step = step.next();
                     }
-                    RoundStreamEvent::RoundFinalized(e) => {
+                    RoundStreamEvent::BatchFinalized(e) => {
                         if step != RoundStep::RoundFinalization {
                             continue;
                         }
 
-                        let round_txid = e.round_txid;
+                        let round_txid = e.commitment_txid;
 
                         tracing::info!(round_id = e.id, %round_txid, "Round finalized");
 
                         return Ok(round_txid);
                     }
-                    RoundStreamEvent::RoundFailed(ref e) => {
+                    RoundStreamEvent::BatchFailed(ref e) => {
                         if Some(&e.id) == round_id.as_ref() {
                             return Err(Error::ark_server(format!(
-                                "failed registering in round {}: {}",
+                                "batch failed {}: {}",
                                 e.id, e.reason
                             )));
                         }

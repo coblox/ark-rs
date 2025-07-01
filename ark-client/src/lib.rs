@@ -5,7 +5,6 @@ use ark_core::build_anchor_tx;
 use ark_core::generate_incoming_vtxo_transaction_history;
 use ark_core::generate_outgoing_vtxo_transaction_history;
 use ark_core::server;
-use ark_core::server::Round;
 use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
 use ark_core::ArkTransaction;
@@ -111,7 +110,7 @@ pub use error::Error;
 /// #         unimplemented!()
 /// #     }
 /// #
-/// #     fn select_coins(&self, target_amount: Amount) -> Result<UtxoCoinSelection, Error> {
+/// #     fn select_coins(&self, target_amount: Amount) -> Result<ark_core::UtxoCoinSelection, Error> {
 /// #         unimplemented!()
 /// #     }
 /// # }
@@ -419,12 +418,6 @@ where
         Ok(vtxos)
     }
 
-    pub async fn get_round(&self, round_txid: String) -> Result<Option<Round>, Error> {
-        let round = self.network_client().get_round(round_txid).await?;
-
-        Ok(round)
-    }
-
     pub async fn get_vtxo_chain(
         &self,
         out_point: OutPoint,
@@ -448,6 +441,7 @@ where
         let mut spendable = vec![];
 
         let vtxos = self.list_vtxos(select_recoverable_vtxos).await?;
+
         for (virtual_tx_outpoints, vtxo) in vtxos.spendable {
             let explorer_utxos = self.blockchain().find_outpoints(vtxo.address()).await?;
 
@@ -486,19 +480,24 @@ where
     pub async fn offchain_balance(&self) -> Result<OffChainBalance, Error> {
         // We should not include recoverable VTXOS in the spendable balance because they cannot be
         // spent until they are claimed.
-        let list = self.spendable_vtxos(false).await?;
+        let list = self
+            .spendable_vtxos(false)
+            .await
+            .context("failed to get spendable VTXOs")?;
         let sum =
             list.iter()
                 .flat_map(|(vtxos, _)| vtxos)
-                .fold(OffChainBalance::default(), |acc, x| match x.is_pending {
-                    true => OffChainBalance {
-                        pending: acc.pending + x.amount,
-                        ..acc
-                    },
-                    false => OffChainBalance {
-                        confirmed: acc.confirmed + x.amount,
-                        ..acc
-                    },
+                .fold(OffChainBalance::default(), |acc, x| {
+                    match x.is_preconfirmed {
+                        true => OffChainBalance {
+                            pending: acc.pending + x.amount,
+                            ..acc
+                        },
+                        false => OffChainBalance {
+                            confirmed: acc.confirmed + x.amount,
+                            ..acc
+                        },
+                    }
                 });
 
         Ok(sum)

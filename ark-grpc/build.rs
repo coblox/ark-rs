@@ -15,10 +15,8 @@ fn generate_protos() -> std::io::Result<()> {
         .build_transport(true)
         .compile_protos(
             &[
-                "proto/ark/v1/admin.proto",
                 "proto/ark/v1/service.proto",
                 "proto/ark/v1/wallet.proto",
-                "proto/ark/v1/explorer.proto",
                 "proto/ark/v1/indexer.proto",
                 "proto/ark/v1/types.proto",
             ],

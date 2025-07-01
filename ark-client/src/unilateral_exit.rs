@@ -43,7 +43,6 @@ where
             .await
             .context("failed to get spendable VTXOs")?;
 
-        let network_client = &self.network_client();
         let mut unilateral_exit_trees = Vec::new();
 
         // For each spendable VTXO, generate its unilateral exit tree.
@@ -95,7 +94,7 @@ where
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let unilateral_exit_tree =
-                    UnilateralExitTree::new(virtual_tx_outpoint.round_txid, paths);
+                    UnilateralExitTree::new(virtual_tx_outpoint.commitment_txid, paths);
 
                 unilateral_exit_trees.push(unilateral_exit_tree);
             }
@@ -105,15 +104,11 @@ where
         for unilateral_exit_tree in unilateral_exit_trees {
             let round_txid = unilateral_exit_tree.round_txid();
 
-            let round_tx = network_client
-                .get_round(round_txid.to_string())
-                .await
-                .map_err(Error::ark_server)?
-                .ok_or_else(|| Error::ad_hoc(format!("could not find round {round_txid}")))?;
-            let round_tx = round_tx.round_tx.ok_or_else(|| {
-                Error::ad_hoc(format!("round {round_txid} is missing transaction data"))
-            })?;
-
+            let round_tx = self
+                .blockchain()
+                .find_tx(&round_txid)
+                .await?
+                .ok_or_else(|| Error::ad_hoc(format!("could not find round TX {round_txid}")))?;
             let signed_unilateral_exit_tree =
                 sign_unilateral_exit_tree(&unilateral_exit_tree, &round_tx)?;
             branches.extend(signed_unilateral_exit_tree);
