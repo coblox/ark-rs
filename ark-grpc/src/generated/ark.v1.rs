@@ -677,10 +677,18 @@ pub struct RegisterIntentResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteIntentRequest {
-    #[prost(string, tag = "1")]
-    pub request_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
-    pub bip322_signature: ::core::option::Option<Bip322Signature>,
+    #[prost(oneof = "delete_intent_request::Proof", tags = "1, 2")]
+    pub proof: ::core::option::Option<delete_intent_request::Proof>,
+}
+/// Nested message and enum types in `DeleteIntentRequest`.
+pub mod delete_intent_request {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Proof {
+        #[prost(string, tag = "1")]
+        IntentId(::prost::alloc::string::String),
+        #[prost(message, tag = "2")]
+        Bip322Signature(super::Bip322Signature),
+    }
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct DeleteIntentResponse {}
