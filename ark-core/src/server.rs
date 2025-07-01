@@ -1,7 +1,9 @@
 //! Messages exchanged between the client and the Ark server.
 
+use crate::Error;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::taproot::Signature;
 use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
@@ -9,24 +11,57 @@ use bitcoin::Psbt;
 use bitcoin::Transaction;
 use bitcoin::Txid;
 use musig::musig;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TxTree {
-    pub levels: Vec<TxTreeLevel>,
+    pub nodes: BTreeMap<(usize, usize), TxTreeNode>,
 }
 
 impl TxTree {
-    pub fn txs(&self) -> impl Iterator<Item = &Transaction> {
-        self.levels
-            .iter()
-            .flat_map(|level| level.nodes.iter().map(|node| &node.tx.unsigned_tx))
+    pub fn new() -> Self {
+        Self {
+            nodes: BTreeMap::new(),
+        }
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct TxTreeLevel {
-    pub nodes: Vec<TxTreeNode>,
+    pub fn get_mut(&mut self, level: usize, index: usize) -> Result<&mut TxTreeNode, Error> {
+        self.nodes
+            .get_mut(&(level, index))
+            .ok_or_else(|| Error::ad_hoc("TxTreeNode not found at ({level}, {index})"))
+    }
+
+    pub fn insert(&mut self, node: TxTreeNode, level: usize, index: usize) {
+        self.nodes.insert((level, index), node);
+    }
+
+    pub fn txs(&self) -> impl Iterator<Item = &Transaction> {
+        self.nodes.values().map(|node| &node.tx.unsigned_tx)
+    }
+
+    /// Get all nodes at a specific level.
+    pub fn get_level(&self, level: usize) -> Vec<&TxTreeNode> {
+        self.nodes
+            .range((level, 0)..(level + 1, 0))
+            .map(|(_, node)| node)
+            .collect()
+    }
+
+    /// Iterate over levels in order.
+    pub fn iter_levels(&self) -> impl Iterator<Item = (usize, Vec<&TxTreeNode>)> {
+        let max_level = self
+            .nodes
+            .keys()
+            .map(|(level, _)| *level)
+            .max()
+            .unwrap_or(0);
+
+        (0..=max_level).map(move |level| {
+            let nodes = self.get_level(level);
+            (level, nodes)
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +69,9 @@ pub struct TxTreeNode {
     pub txid: Txid,
     pub tx: Psbt,
     pub parent_txid: Txid,
+    pub level: i32,
+    pub level_index: i32,
+    pub leaf: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -144,8 +182,6 @@ pub struct BatchStartedEvent {
 pub struct RoundFinalizationEvent {
     pub id: String,
     pub round_tx: Psbt,
-    pub vtxo_tree: TxTree,
-    pub connector_tree: TxTree,
     /// The key is the VTXO outpoint; the value is the corresponding connector outpoint.
     pub connectors_index: HashMap<OutPoint, OutPoint>,
 }
@@ -166,7 +202,6 @@ pub struct RoundFailedEvent {
 pub struct RoundSigningEvent {
     pub id: String,
     pub cosigners_pubkeys: Vec<PublicKey>,
-    pub unsigned_vtxo_tree: Option<TxTree>,
     pub unsigned_round_tx: Psbt,
 }
 
@@ -177,6 +212,30 @@ pub struct RoundSigningNoncesGeneratedEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct BatchTreeEvent {
+    pub id: String,
+    pub topic: Vec<String>,
+    pub batch_tree_event_type: BatchTreeEventType,
+    pub tree_tx: Option<TxTreeNode>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BatchTreeSignatureEvent {
+    pub id: String,
+    pub topic: Vec<String>,
+    pub batch_tree_event_type: BatchTreeEventType,
+    pub level: i32,
+    pub level_index: i32,
+    pub signature: Signature,
+}
+
+#[derive(Debug, Clone)]
+pub enum BatchTreeEventType {
+    Vtxo,
+    Connector,
+}
+
+#[derive(Debug, Clone)]
 pub enum RoundStreamEvent {
     BatchStarted(BatchStartedEvent),
     RoundFinalization(RoundFinalizationEvent),
@@ -184,6 +243,8 @@ pub enum RoundStreamEvent {
     RoundFailed(RoundFailedEvent),
     RoundSigning(RoundSigningEvent),
     RoundSigningNoncesGenerated(RoundSigningNoncesGeneratedEvent),
+    BatchTree(BatchTreeEvent),
+    BatchTreeSignature(BatchTreeSignatureEvent),
 }
 
 pub enum TransactionEvent {

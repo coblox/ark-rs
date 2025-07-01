@@ -453,7 +453,7 @@ where
     tracing::debug!(
         ?outpoint,
         index = input_index,
-        "Signing checkpoint output for offchian virtual transaction"
+        "Signing checkpoint output for offchain virtual transaction"
     );
 
     let psbt_input = psbt.inputs.get_mut(input_index).expect("input at index");

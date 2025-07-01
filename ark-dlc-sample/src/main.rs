@@ -16,7 +16,9 @@ use ark_core::round::generate_nonce_tree;
 use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::server;
+use ark_core::server::BatchTreeEventType;
 use ark_core::server::RoundStreamEvent;
+use ark_core::server::TxTree;
 use ark_core::server::VtxoOutPoint;
 use ark_core::vtxo::list_virtual_tx_outpoints;
 use ark_core::vtxo::VirtualTxOutpoints;
@@ -24,6 +26,7 @@ use ark_core::ArkAddress;
 use ark_core::BoardingOutput;
 use ark_core::ExplorerUtxo;
 use ark_core::Vtxo;
+use ark_core::VTXO_INPUT_INDEX;
 use bitcoin::hashes::sha256;
 use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
@@ -1221,6 +1224,7 @@ async fn settle(
     tracing::info!(intent_id, "Registered intent");
 
     let mut event_stream = grpc_client.get_event_stream().await?;
+    let mut vtxo_tree = TxTree::new();
 
     let batch_started_event = match event_stream.next().await {
         Some(Ok(RoundStreamEvent::BatchStarted(e))) => e,
@@ -1244,22 +1248,37 @@ async fn settle(
         )
     }
 
-    let round_signing_event = match event_stream.next().await {
-        Some(Ok(RoundStreamEvent::RoundSigning(e))) => e,
-        other => bail!("Did not get round signing event: {other:?}"),
-    };
+    let round_signing_event;
+    loop {
+        match event_stream.next().await {
+            Some(Ok(RoundStreamEvent::BatchTree(e))) => {
+                if let Some(tree_node) = e.tree_tx {
+                    let level = tree_node.level as usize;
+                    let level_index = tree_node.level_index as usize;
+                    match e.batch_tree_event_type {
+                        BatchTreeEventType::Vtxo => {
+                            vtxo_tree.insert(tree_node, level, level_index);
+                        }
+                        BatchTreeEventType::Connector => {
+                            bail!("Unexpected connector batch tree event");
+                        }
+                    }
+                }
+            }
+            Some(Ok(RoundStreamEvent::RoundSigning(e))) => {
+                round_signing_event = e;
+                break;
+            }
+            other => bail!("Unexpected event while waiting for round signing: {other:?}"),
+        }
+    }
 
     let round_id = round_signing_event.id;
-
     tracing::info!(round_id, "Round signing started");
-
-    let unsigned_vtxo_tree = round_signing_event
-        .unsigned_vtxo_tree
-        .expect("to have an unsigned VTXO tree");
 
     let nonce_tree = generate_nonce_tree(
         &mut rng,
-        &unsigned_vtxo_tree,
+        &vtxo_tree,
         cosigner_kp.public_key(),
         &round_signing_event.unsigned_round_tx,
     )?;
@@ -1277,17 +1296,17 @@ async fn settle(
         other => bail!("Did not get round signing nonces generated event: {other:?}"),
     };
 
+    tracing::info!(round_id, "Round combined nonces generated");
+
     let round_id = round_signing_nonces_generated_event.id;
 
     let agg_pub_nonce_tree = round_signing_nonces_generated_event.tree_nonces;
-
-    tracing::info!(round_id, "Round combined nonces generated");
 
     let partial_sig_tree = sign_vtxo_tree(
         server_info.vtxo_tree_expiry,
         server_info.pk.x_only_public_key().0,
         &cosigner_kp,
-        &unsigned_vtxo_tree,
+        &vtxo_tree,
         &round_signing_event.unsigned_round_tx,
         nonce_tree,
         &agg_pub_nonce_tree.into(),
@@ -1301,10 +1320,46 @@ async fn settle(
         )
         .await?;
 
-    let round_finalization_event = match event_stream.next().await {
-        Some(Ok(RoundStreamEvent::RoundFinalization(e))) => e,
-        other => bail!("Did not get round finalization event: {other:?}"),
-    };
+    let mut connector_tree = TxTree::new();
+
+    let round_finalization_event;
+    loop {
+        match event_stream.next().await {
+            Some(Ok(RoundStreamEvent::BatchTree(e))) => {
+                if let Some(tree_node) = e.tree_tx {
+                    let level = tree_node.level as usize;
+                    let level_index = tree_node.level_index as usize;
+                    match e.batch_tree_event_type {
+                        BatchTreeEventType::Vtxo => {
+                            bail!("Unexpected VTXO batch tree event");
+                        }
+                        BatchTreeEventType::Connector => {
+                            connector_tree.insert(tree_node, level, level_index);
+                        }
+                    }
+                }
+            }
+            Some(Ok(RoundStreamEvent::BatchTreeSignature(e))) => {
+                let level = e.level as usize;
+                let level_index = e.level_index as usize;
+                match e.batch_tree_event_type {
+                    BatchTreeEventType::Vtxo => {
+                        let node = vtxo_tree.get_mut(level, level_index)?;
+
+                        node.tx.inputs[VTXO_INPUT_INDEX].tap_key_sig = Some(e.signature);
+                    }
+                    BatchTreeEventType::Connector => {
+                        bail!("received batch tree signature for connectors tree");
+                    }
+                }
+            }
+            Some(Ok(RoundStreamEvent::RoundFinalization(e))) => {
+                round_finalization_event = e;
+                break;
+            }
+            other => bail!("Unexpected event while waiting for round finalization: {other:?}"),
+        }
+    }
 
     let round_id = round_finalization_event.id;
 
@@ -1328,7 +1383,7 @@ async fn settle(
     let signed_forfeit_psbts = create_and_sign_forfeit_txs(
         &keypair,
         vtxo_inputs.as_slice(),
-        round_finalization_event.connector_tree,
+        &connector_tree,
         &round_finalization_event.connectors_index,
         &server_info.forfeit_address,
         server_info.dust,

@@ -59,6 +59,12 @@ pub struct Node {
     pub tx: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
     pub parent_txid: ::prost::alloc::string::String,
+    #[prost(int32, tag = "4")]
+    pub level: i32,
+    #[prost(int32, tag = "5")]
+    pub level_index: i32,
+    #[prost(bool, tag = "6")]
+    pub leaf: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Vtxo {
@@ -193,12 +199,8 @@ pub struct RoundFinalizationEvent {
     pub id: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub round_tx: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "3")]
-    pub vtxo_tree: ::core::option::Option<Tree>,
-    #[prost(message, optional, tag = "4")]
-    pub connectors: ::core::option::Option<Tree>,
     /// vtxo outpoint encoded as string -> connector outpoint
-    #[prost(map = "string, message", tag = "5")]
+    #[prost(map = "string, message", tag = "3")]
     pub connectors_index: ::std::collections::HashMap<::prost::alloc::string::String, Outpoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -221,9 +223,7 @@ pub struct RoundSigningEvent {
     pub id: ::prost::alloc::string::String,
     #[prost(string, repeated, tag = "2")]
     pub cosigners_pubkeys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(message, optional, tag = "3")]
-    pub unsigned_vtxo_tree: ::core::option::Option<Tree>,
-    #[prost(string, tag = "4")]
+    #[prost(string, tag = "3")]
     pub unsigned_round_tx: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -232,6 +232,32 @@ pub struct RoundSigningNoncesGeneratedEvent {
     pub id: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub tree_nonces: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BatchTreeEvent {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub topic: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, tag = "3")]
+    pub batch_index: i32,
+    #[prost(message, optional, tag = "4")]
+    pub tree_tx: ::core::option::Option<Node>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BatchTreeSignatureEvent {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "2")]
+    pub topic: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, tag = "3")]
+    pub batch_index: i32,
+    #[prost(int32, tag = "4")]
+    pub level: i32,
+    #[prost(int32, tag = "5")]
+    pub level_index: i32,
+    #[prost(string, tag = "6")]
+    pub signature: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -768,7 +794,10 @@ pub struct SubmitSignedForfeitTxsResponse {}
 pub struct GetEventStreamRequest {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetEventStreamResponse {
-    #[prost(oneof = "get_event_stream_response::Event", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(
+        oneof = "get_event_stream_response::Event",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8"
+    )]
     pub event: ::core::option::Option<get_event_stream_response::Event>,
 }
 /// Nested message and enum types in `GetEventStreamResponse`.
@@ -787,6 +816,10 @@ pub mod get_event_stream_response {
         RoundSigning(super::RoundSigningEvent),
         #[prost(message, tag = "6")]
         RoundSigningNoncesGenerated(super::RoundSigningNoncesGeneratedEvent),
+        #[prost(message, tag = "7")]
+        BatchTree(super::BatchTreeEvent),
+        #[prost(message, tag = "8")]
+        BatchTreeSignature(super::BatchTreeSignatureEvent),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

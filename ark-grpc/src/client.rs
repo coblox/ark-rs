@@ -18,6 +18,9 @@ use crate::tree;
 use crate::Error;
 use ark_core::proof_of_funds;
 use ark_core::server::BatchStartedEvent;
+use ark_core::server::BatchTreeEvent;
+use ark_core::server::BatchTreeEventType;
+use ark_core::server::BatchTreeSignatureEvent;
 use ark_core::server::ChainedTx;
 use ark_core::server::ChainedTxType;
 use ark_core::server::FinalizeOffchainTxResponse;
@@ -35,7 +38,6 @@ use ark_core::server::RoundTransaction;
 use ark_core::server::SubmitOffchainTxResponse;
 use ark_core::server::TransactionEvent;
 use ark_core::server::TxTree;
-use ark_core::server::TxTreeLevel;
 use ark_core::server::TxTreeNode;
 use ark_core::server::VtxoChain;
 use ark_core::server::VtxoChains;
@@ -45,7 +47,9 @@ use async_stream::stream;
 use base64::Engine;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::hex::DisplayHex;
+use bitcoin::hex::FromHex;
 use bitcoin::secp256k1::PublicKey;
+use bitcoin::taproot::Signature;
 use bitcoin::Address;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
@@ -488,27 +492,16 @@ impl TryFrom<generated::ark::v1::Tree> for TxTree {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::Tree) -> Result<Self, Self::Error> {
-        let levels = value
-            .levels
-            .into_iter()
-            .map(|level| level.try_into())
-            .collect::<Result<Vec<_>, Error>>()?;
+        let mut tree = TxTree::new();
 
-        Ok(TxTree { levels })
-    }
-}
+        for (level_idx, level) in value.levels.into_iter().enumerate() {
+            for (node_idx, node) in level.nodes.into_iter().enumerate() {
+                let node = node.try_into()?;
+                tree.insert(node, level_idx, node_idx);
+            }
+        }
 
-impl TryFrom<generated::ark::v1::TreeLevel> for TxTreeLevel {
-    type Error = Error;
-
-    fn try_from(value: generated::ark::v1::TreeLevel) -> Result<Self, Self::Error> {
-        let nodes = value
-            .nodes
-            .into_iter()
-            .map(|node| node.try_into())
-            .collect::<Result<Vec<_>, Error>>()?;
-
-        Ok(TxTreeLevel { nodes })
+        Ok(tree)
     }
 }
 
@@ -533,6 +526,9 @@ impl TryFrom<generated::ark::v1::Node> for TxTreeNode {
             txid,
             tx,
             parent_txid,
+            level: value.level,
+            level_index: value.level_index,
+            leaf: value.leaf,
         })
     }
 }
@@ -562,13 +558,8 @@ impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEv
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        let vtxo_tree = value.vtxo_tree.unwrap_or_default().try_into()?;
-
         let round_tx = base64.decode(&value.round_tx).map_err(Error::conversion)?;
-
         let round_tx = Psbt::deserialize(&round_tx).map_err(Error::conversion)?;
-
-        let connector_tree = TxTree::try_from(value.connectors.unwrap_or_default())?;
 
         let connectors_index = value
             .connectors_index
@@ -592,8 +583,6 @@ impl TryFrom<generated::ark::v1::RoundFinalizationEvent> for RoundFinalizationEv
         Ok(RoundFinalizationEvent {
             id: value.id,
             round_tx,
-            vtxo_tree,
-            connector_tree,
             connectors_index,
         })
     }
@@ -632,11 +621,6 @@ impl TryFrom<generated::ark::v1::RoundSigningEvent> for RoundSigningEvent {
         .decode(&value.unsigned_round_tx)
         .map_err(Error::conversion)?;
 
-        let unsigned_vtxo_tree = value
-            .unsigned_vtxo_tree
-            .map(|tree| tree.try_into())
-            .transpose()?;
-
         let unsigned_round_tx = Psbt::deserialize(&unsigned_round_tx).map_err(Error::conversion)?;
 
         Ok(RoundSigningEvent {
@@ -646,7 +630,6 @@ impl TryFrom<generated::ark::v1::RoundSigningEvent> for RoundSigningEvent {
                 .into_iter()
                 .map(|pk| pk.parse().map_err(Error::conversion))
                 .collect::<Result<Vec<_>, Error>>()?,
-            unsigned_vtxo_tree,
             unsigned_round_tx,
         })
     }
@@ -665,6 +648,51 @@ impl TryFrom<generated::ark::v1::RoundSigningNoncesGeneratedEvent>
         Ok(RoundSigningNoncesGeneratedEvent {
             id: value.id,
             tree_nonces,
+        })
+    }
+}
+
+impl TryFrom<generated::ark::v1::BatchTreeEvent> for BatchTreeEvent {
+    type Error = Error;
+
+    fn try_from(value: generated::ark::v1::BatchTreeEvent) -> Result<Self, Self::Error> {
+        let tree_tx = value.tree_tx.map(|t| t.try_into()).transpose()?;
+
+        let batch_tree_event_type = match value.batch_index {
+            0 => BatchTreeEventType::Vtxo,
+            1 => BatchTreeEventType::Connector,
+            n => return Err(Error::conversion(format!("unsupported batch index: {n}"))),
+        };
+
+        Ok(Self {
+            id: value.id,
+            topic: value.topic,
+            batch_tree_event_type,
+            tree_tx,
+        })
+    }
+}
+
+impl TryFrom<generated::ark::v1::BatchTreeSignatureEvent> for BatchTreeSignatureEvent {
+    type Error = Error;
+
+    fn try_from(value: generated::ark::v1::BatchTreeSignatureEvent) -> Result<Self, Self::Error> {
+        let batch_tree_event_type = match value.batch_index {
+            0 => BatchTreeEventType::Vtxo,
+            1 => BatchTreeEventType::Connector,
+            n => return Err(Error::conversion(format!("unsupported batch index: {n}"))),
+        };
+
+        let signature = Vec::from_hex(&value.signature).map_err(Error::conversion)?;
+        let signature = Signature::from_slice(&signature).map_err(Error::conversion)?;
+
+        Ok(Self {
+            id: value.id,
+            topic: value.topic,
+            batch_tree_event_type,
+            level: value.level,
+            level_index: value.level_index,
+            signature,
         })
     }
 }
@@ -694,6 +722,12 @@ impl TryFrom<generated::ark::v1::get_event_stream_response::Event> for RoundStre
             generated::ark::v1::get_event_stream_response::Event::RoundSigningNoncesGenerated(
                 e,
             ) => RoundStreamEvent::RoundSigningNoncesGenerated(e.try_into()?),
+            generated::ark::v1::get_event_stream_response::Event::BatchTree(e) => {
+                RoundStreamEvent::BatchTree(e.try_into()?)
+            }
+            generated::ark::v1::get_event_stream_response::Event::BatchTreeSignature(e) => {
+                RoundStreamEvent::BatchTreeSignature(e.try_into()?)
+            }
         })
     }
 }

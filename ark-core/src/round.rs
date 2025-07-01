@@ -197,12 +197,9 @@ where
     let secp_musig = ::musig::Secp256k1::new();
 
     let nonce_tree = unsigned_vtxo_tree
-        .levels
-        .iter()
-        .enumerate()
-        .map(|(i, level)| {
-            level
-                .nodes
+        .iter_levels()
+        .map(|(i, level_nodes)| {
+            level_nodes
                 .iter()
                 .map(|node| {
                     let cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(&node.tx)?;
@@ -266,9 +263,8 @@ fn virtual_tx_sighash(
     let prevout = if level == 0 {
         round_tx.clone().unsigned_tx.output[input_vout].clone()
     } else {
-        let parent_level = &vtxo_tree.levels[level - 1];
+        let parent_level = vtxo_tree.get_level(level - 1);
         let parent_tx = parent_level
-            .nodes
             .iter()
             .find_map(|node| (node.txid == parent_txid).then_some(node.tx.unsigned_tx.clone()))
             .ok_or(Error::crypto("missing parent for VTXO {i}, {j}"))?;
@@ -324,9 +320,9 @@ pub fn sign_vtxo_tree(
             .expect("valid keypair");
 
     let mut partial_sig_tree: Vec<Vec<Option<musig::PartialSignature>>> = Vec::new();
-    for (i, level) in vtxo_tree.levels.iter().enumerate() {
+    for (i, level_nodes) in vtxo_tree.iter_levels() {
         let mut sigs_level = Vec::new();
-        for (j, node) in level.nodes.iter().enumerate() {
+        for (j, node) in level_nodes.iter().enumerate() {
             let mut cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(&node.tx)?;
             cosigner_pks.sort_by_key(|k| k.serialize());
 
@@ -389,7 +385,7 @@ pub fn create_and_sign_forfeit_txs(
     // `Sign` trait, so that the caller can find the secret key for the given `VtxoInput`.
     kp: &Keypair,
     vtxo_inputs: &[VtxoInput],
-    connector_tree: TxTree,
+    connector_tree: &TxTree,
     connector_index: &HashMap<OutPoint, OutPoint>,
     server_forfeit_address: &Address,
     // As defined by the server.

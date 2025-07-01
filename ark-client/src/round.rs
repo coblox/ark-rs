@@ -14,9 +14,11 @@ use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::round::NonceTree;
 use ark_core::round::PubNonceTree;
+use ark_core::server::BatchTreeEventType;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::TxTree;
 use ark_core::ArkAddress;
+use ark_core::VTXO_INPUT_INDEX;
 use backon::ExponentialBuilder;
 use backon::Retryable;
 use bitcoin::hashes::sha256;
@@ -352,7 +354,8 @@ where
         let (ark_server_pk, _) = server_info.pk.x_only_public_key();
 
         let mut unsigned_round_tx: Option<Psbt> = None;
-        let mut vtxo_tree: Option<TxTree> = None;
+        let mut vtxo_tree = TxTree::new();
+        let mut connectors_tree = TxTree::new();
         let mut our_nonce_trees: Option<HashMap<Keypair, NonceTree>> = None;
         loop {
             match stream.next().await {
@@ -391,15 +394,52 @@ where
                             );
                         }
                     }
+                    RoundStreamEvent::BatchTree(e) => {
+                        if step != RoundStep::BatchStarted
+                            && step != RoundStep::RoundSigningNoncesGenerated
+                        {
+                            continue;
+                        }
+
+                        if let Some(tree_node) = e.tree_tx {
+                            let level = tree_node.level as usize;
+                            let level_index = tree_node.level_index as usize;
+                            match e.batch_tree_event_type {
+                                BatchTreeEventType::Vtxo => {
+                                    vtxo_tree.insert(tree_node, level, level_index);
+                                }
+                                BatchTreeEventType::Connector => {
+                                    connectors_tree.insert(tree_node, level, level_index);
+                                }
+                            }
+                        }
+                    }
+                    RoundStreamEvent::BatchTreeSignature(e) => {
+                        if step != RoundStep::RoundSigningNoncesGenerated {
+                            continue;
+                        }
+
+                        let level = e.level as usize;
+                        let level_index = e.level_index as usize;
+                        match e.batch_tree_event_type {
+                            BatchTreeEventType::Vtxo => {
+                                let node = vtxo_tree.get_mut(level, level_index)?;
+
+                                node.tx.inputs[VTXO_INPUT_INDEX].tap_key_sig = Some(e.signature);
+                            }
+                            BatchTreeEventType::Connector => {
+                                return Err(Error::ark_server(
+                                    "received batch tree signature for connectors tree",
+                                ));
+                            }
+                        }
+                    }
                     RoundStreamEvent::RoundSigning(e) => {
                         if step != RoundStep::BatchStarted {
                             continue;
                         }
 
                         tracing::info!(round_id = e.id, "Round signing started");
-
-                        let unsigned_vtxo_tree =
-                            e.unsigned_vtxo_tree.expect("to have an unsigned vtxo tree");
 
                         for own_cosigner_pk in own_cosigner_pks.iter() {
                             if !&e.cosigners_pubkeys.iter().any(|p| p == own_cosigner_pk) {
@@ -415,7 +455,7 @@ where
                             let own_cosigner_pk = own_cosigner_kp.public_key();
                             let nonce_tree = generate_nonce_tree(
                                 rng,
-                                &unsigned_vtxo_tree,
+                                &vtxo_tree,
                                 own_cosigner_pk,
                                 &e.unsigned_round_tx,
                             )
@@ -442,8 +482,6 @@ where
 
                         our_nonce_trees = Some(our_nonce_tree_map);
 
-                        vtxo_tree = Some(unsigned_vtxo_tree);
-
                         unsigned_round_tx = Some(e.unsigned_round_tx);
 
                         step = step.next();
@@ -466,9 +504,6 @@ where
                             .as_ref()
                             .ok_or(Error::ark_server("missing round TX during round protocol"))?;
 
-                        let vtxo_tree = vtxo_tree
-                            .as_ref()
-                            .ok_or(Error::ark_server("missing vtxo tree during round protocol"))?;
                         let our_nonce_trees = our_nonce_trees.take().ok_or(Error::ark_server(
                             "missing nonce tree during round protocol",
                         ))?;
@@ -478,7 +513,7 @@ where
                                 server_info.vtxo_tree_expiry,
                                 ark_server_pk,
                                 &cosigner_kp,
-                                vtxo_tree,
+                                &vtxo_tree,
                                 unsigned_round_tx,
                                 our_nonce_tree,
                                 &agg_pub_nonce_tree,
@@ -508,7 +543,7 @@ where
                         let signed_forfeit_psbts = create_and_sign_forfeit_txs(
                             self.kp(),
                             vtxo_inputs.as_slice(),
-                            e.connector_tree,
+                            &connectors_tree,
                             &e.connectors_index,
                             &server_info.forfeit_address,
                             server_info.dust,

@@ -279,6 +279,12 @@ nigiri-wipe:
     nigiri stop --delete
 
 ## -------------------------
+## Ark sample commands
+## -------------------------
+
+mod ark-sample 'ark-sample/justfile'
+
+## -------------------------
 ## Running tests
 ## -------------------------
 

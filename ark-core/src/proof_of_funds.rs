@@ -136,6 +136,7 @@ where
     let expire_at = now + (2 * 60);
 
     let intent_message = IntentMessage {
+        intent_message_type: IntentMessageType::Register,
         input_tap_trees,
         onchain_output_indexes,
         valid_at: now,
@@ -371,6 +372,8 @@ fn bip322_hash(message: &[u8]) -> sha256::Hash {
 
 #[derive(Serialize)]
 pub struct IntentMessage {
+    #[serde(rename = "type")]
+    intent_message_type: IntentMessageType,
     input_tap_trees: Vec<String>,
     // Indicates which outputs are on-chain out of all the outputs we are registering.
     onchain_output_indexes: Vec<usize>,
@@ -388,6 +391,13 @@ impl IntentMessage {
             .map_err(Error::ad_hoc)
             .context("failed to serialize intent message to JSON")
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IntentMessageType {
+    Register,
+    Delete,
 }
 
 #[derive(Serialize)]
