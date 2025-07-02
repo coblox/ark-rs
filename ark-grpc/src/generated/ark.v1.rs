@@ -23,31 +23,6 @@ pub struct Output {
     pub amount: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Tree {
-    #[prost(message, repeated, tag = "1")]
-    pub levels: ::prost::alloc::vec::Vec<TreeLevel>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct TreeLevel {
-    #[prost(message, repeated, tag = "1")]
-    pub nodes: ::prost::alloc::vec::Vec<Node>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Node {
-    #[prost(string, tag = "1")]
-    pub txid: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub tx: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
-    pub parent_txid: ::prost::alloc::string::String,
-    #[prost(int32, tag = "4")]
-    pub level: i32,
-    #[prost(int32, tag = "5")]
-    pub level_index: i32,
-    #[prost(bool, tag = "6")]
-    pub leaf: bool,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Vtxo {
     #[prost(message, optional, tag = "1")]
     pub outpoint: ::core::option::Option<Outpoint>,
@@ -163,8 +138,13 @@ pub struct TreeTxEvent {
     pub topic: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(int32, tag = "3")]
     pub batch_index: i32,
-    #[prost(message, optional, tag = "4")]
-    pub tree_tx: ::core::option::Option<Node>,
+    #[prost(string, tag = "4")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub tx: ::prost::alloc::string::String,
+    /// output index -> child txid
+    #[prost(map = "uint32, string", tag = "6")]
+    pub children: ::std::collections::HashMap<u32, ::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TreeSignatureEvent {
@@ -174,11 +154,9 @@ pub struct TreeSignatureEvent {
     pub topic: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(int32, tag = "3")]
     pub batch_index: i32,
-    #[prost(int32, tag = "4")]
-    pub level: i32,
-    #[prost(int32, tag = "5")]
-    pub level_index: i32,
-    #[prost(string, tag = "6")]
+    #[prost(string, tag = "4")]
+    pub txid: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
     pub signature: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -1272,12 +1250,9 @@ pub struct IndexerOutpoint {
 pub struct IndexerNode {
     #[prost(string, tag = "1")]
     pub txid: ::prost::alloc::string::String,
-    #[prost(string, tag = "3")]
-    pub parent_txid: ::prost::alloc::string::String,
-    #[prost(int32, tag = "4")]
-    pub level: i32,
-    #[prost(int32, tag = "5")]
-    pub level_index: i32,
+    /// vout -> txid
+    #[prost(map = "uint32, string", tag = "2")]
+    pub children: ::std::collections::HashMap<u32, ::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IndexerVtxo {

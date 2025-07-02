@@ -12,7 +12,6 @@ use crate::generated::ark::v1::RegisterIntentRequest;
 use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
-use crate::tree;
 use crate::Error;
 use ark_core::proof_of_funds;
 use ark_core::server::BatchFailed;
@@ -26,6 +25,8 @@ use ark_core::server::CommitmentTransaction;
 use ark_core::server::FinalizeOffchainTxResponse;
 use ark_core::server::Info;
 use ark_core::server::ListVtxo;
+use ark_core::server::NoncePks;
+use ark_core::server::PartialSigTree;
 use ark_core::server::RedeemTransaction;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::SubmitOffchainTxResponse;
@@ -34,15 +35,13 @@ use ark_core::server::TreeNoncesAggregatedEvent;
 use ark_core::server::TreeSignatureEvent;
 use ark_core::server::TreeSigningStartedEvent;
 use ark_core::server::TreeTxEvent;
-use ark_core::server::TxTree;
-use ark_core::server::TxTreeNode;
+use ark_core::server::TxGraphChunk;
 use ark_core::server::VtxoChain;
 use ark_core::server::VtxoChains;
 use ark_core::server::VtxoOutPoint;
 use ark_core::ArkAddress;
 use async_stream::stream;
 use base64::Engine;
-use bitcoin::hex::DisplayHex;
 use bitcoin::hex::FromHex;
 use bitcoin::secp256k1::PublicKey;
 use bitcoin::taproot::Signature;
@@ -52,7 +51,6 @@ use bitcoin::Txid;
 use futures::Stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
-use musig::musig;
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -278,17 +276,17 @@ impl Client {
         &self,
         batch_id: &str,
         cosigner_pubkey: PublicKey,
-        pub_nonce_tree: Vec<Vec<Option<musig::PublicNonce>>>,
+        pub_nonce_tree: NoncePks,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 
-        let pub_nonce_tree = tree::encode_tree(pub_nonce_tree).map_err(Error::conversion)?;
+        let tree_nonces = serde_json::to_string(&pub_nonce_tree).map_err(Error::conversion)?;
 
         client
             .submit_tree_nonces(SubmitTreeNoncesRequest {
                 batch_id: batch_id.to_string(),
                 pubkey: cosigner_pubkey.to_string(),
-                tree_nonces: pub_nonce_tree.to_lower_hex_string(),
+                tree_nonces,
             })
             .await
             .map_err(Error::request)?;
@@ -300,17 +298,18 @@ impl Client {
         &self,
         batch_id: &str,
         cosigner_pk: PublicKey,
-        partial_sig_tree: Vec<Vec<Option<musig::PartialSignature>>>,
+        partial_sig_tree: PartialSigTree,
     ) -> Result<(), Error> {
         let mut client = self.inner_ark_client()?;
 
-        let tree_signatures = tree::encode_tree(partial_sig_tree).map_err(Error::conversion)?;
+        let tree_signatures =
+            serde_json::to_string(&partial_sig_tree).map_err(Error::conversion)?;
 
         client
             .submit_tree_signatures(SubmitTreeSignaturesRequest {
                 batch_id: batch_id.to_string(),
                 pubkey: cosigner_pk.to_string(),
-                tree_signatures: tree_signatures.to_lower_hex_string(),
+                tree_signatures,
             })
             .await
             .map_err(Error::request)?;
@@ -471,51 +470,6 @@ impl Client {
     }
 }
 
-impl TryFrom<generated::ark::v1::Tree> for TxTree {
-    type Error = Error;
-
-    fn try_from(value: generated::ark::v1::Tree) -> Result<Self, Self::Error> {
-        let mut tree = TxTree::new();
-
-        for (level_idx, level) in value.levels.into_iter().enumerate() {
-            for (node_idx, node) in level.nodes.into_iter().enumerate() {
-                let node = node.try_into()?;
-                tree.insert(node, level_idx, node_idx);
-            }
-        }
-
-        Ok(tree)
-    }
-}
-
-impl TryFrom<generated::ark::v1::Node> for TxTreeNode {
-    type Error = Error;
-
-    fn try_from(value: generated::ark::v1::Node) -> Result<Self, Self::Error> {
-        let txid: Txid = value.txid.parse().map_err(Error::conversion)?;
-
-        let tx = base64::engine::GeneralPurpose::new(
-            &base64::alphabet::STANDARD,
-            base64::engine::GeneralPurposeConfig::new(),
-        )
-        .decode(&value.tx)
-        .map_err(Error::conversion)?;
-
-        let tx = Psbt::deserialize(&tx).map_err(Error::conversion)?;
-
-        let parent_txid: Txid = value.parent_txid.parse().map_err(Error::conversion)?;
-
-        Ok(TxTreeNode {
-            txid,
-            tx,
-            parent_txid,
-            level: value.level,
-            level_index: value.level_index,
-            leaf: value.leaf,
-        })
-    }
-}
-
 impl TryFrom<generated::ark::v1::BatchStartedEvent> for BatchStartedEvent {
     type Error = Error;
 
@@ -621,7 +575,7 @@ impl TryFrom<generated::ark::v1::TreeNoncesAggregatedEvent> for TreeNoncesAggreg
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::TreeNoncesAggregatedEvent) -> Result<Self, Self::Error> {
-        let tree_nonces = crate::decode_tree(value.tree_nonces)?;
+        let tree_nonces = serde_json::from_str(&value.tree_nonces).map_err(Error::conversion)?;
 
         Ok(TreeNoncesAggregatedEvent {
             id: value.id,
@@ -634,19 +588,37 @@ impl TryFrom<generated::ark::v1::TreeTxEvent> for TreeTxEvent {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::TreeTxEvent) -> Result<Self, Self::Error> {
-        let tree_tx = value.tree_tx.map(|t| t.try_into()).transpose()?;
-
         let batch_tree_event_type = match value.batch_index {
             0 => BatchTreeEventType::Vtxo,
             1 => BatchTreeEventType::Connector,
             n => return Err(Error::conversion(format!("unsupported batch index: {n}"))),
         };
 
+        let txid = if value.txid.is_empty() {
+            None
+        } else {
+            Some(value.txid.parse().map_err(Error::conversion)?)
+        };
+
+        let base64 = &base64::engine::GeneralPurpose::new(
+            &base64::alphabet::STANDARD,
+            base64::engine::GeneralPurposeConfig::new(),
+        );
+
+        let bytes = base64.decode(&value.tx).map_err(Error::conversion)?;
+        let tx = Psbt::deserialize(&bytes).map_err(Error::conversion)?;
+
+        let children = value
+            .children
+            .iter()
+            .map(|(index, txid)| Ok((*index, txid.parse().map_err(Error::conversion)?)))
+            .collect::<Result<HashMap<_, _>, Error>>()?;
+
         Ok(Self {
             id: value.id,
             topic: value.topic,
             batch_tree_event_type,
-            tree_tx,
+            tx_graph_chunk: TxGraphChunk { txid, tx, children },
         })
     }
 }
@@ -661,6 +633,8 @@ impl TryFrom<generated::ark::v1::TreeSignatureEvent> for TreeSignatureEvent {
             n => return Err(Error::conversion(format!("unsupported batch index: {n}"))),
         };
 
+        let txid = value.txid.parse().map_err(Error::conversion)?;
+
         let signature = Vec::from_hex(&value.signature).map_err(Error::conversion)?;
         let signature = Signature::from_slice(&signature).map_err(Error::conversion)?;
 
@@ -668,8 +642,7 @@ impl TryFrom<generated::ark::v1::TreeSignatureEvent> for TreeSignatureEvent {
             id: value.id,
             topic: value.topic,
             batch_tree_event_type,
-            level: value.level,
-            level_index: value.level_index,
+            txid,
             signature,
         })
     }
@@ -846,8 +819,6 @@ impl TryFrom<generated::ark::v1::GetVirtualTxsResponse> for VirtualTxsResponse {
         let txs = value
             .txs
             .into_iter()
-            // .map(|tx| bitcoin::consensus::encode::deserialize_hex(&tx).
-            // map_err(Error::conversion))
             .map(|tx| {
                 let bytes = base64.decode(&tx).map_err(Error::conversion)?;
                 let psbt = Psbt::deserialize(&bytes).map_err(Error::conversion)?;

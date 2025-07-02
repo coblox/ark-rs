@@ -12,13 +12,11 @@ use ark_core::round::create_and_sign_forfeit_txs;
 use ark_core::round::generate_nonce_tree;
 use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
-use ark_core::round::NonceTree;
-use ark_core::round::PubNonceTree;
+use ark_core::round::NonceKps;
 use ark_core::server::BatchTreeEventType;
 use ark_core::server::RoundStreamEvent;
-use ark_core::server::TxTree;
+use ark_core::server::TxGraph;
 use ark_core::ArkAddress;
-use ark_core::VTXO_INPUT_INDEX;
 use backon::ExponentialBuilder;
 use backon::Retryable;
 use bitcoin::hashes::sha256;
@@ -29,7 +27,6 @@ use bitcoin::secp256k1;
 use bitcoin::secp256k1::schnorr;
 use bitcoin::Address;
 use bitcoin::Amount;
-use bitcoin::Psbt;
 use bitcoin::TxOut;
 use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
@@ -364,10 +361,14 @@ where
 
         let (ark_server_pk, _) = server_info.pk.x_only_public_key();
 
-        let mut unsigned_round_tx: Option<Psbt> = None;
-        let mut vtxo_tree = TxTree::new();
-        let mut connectors_tree = TxTree::new();
-        let mut our_nonce_trees: Option<HashMap<Keypair, NonceTree>> = None;
+        let mut unsigned_round_tx = None;
+
+        let mut vtxo_graph_chunks = Some(Vec::new());
+        let mut vtxo_graph: Option<TxGraph> = None;
+
+        let mut connectors_graph_chunks = Some(Vec::new());
+
+        let mut our_nonce_trees: Option<HashMap<Keypair, NonceKps>> = None;
         loop {
             match stream.next().await {
                 Some(Ok(event)) => match event {
@@ -412,16 +413,30 @@ where
                             continue;
                         }
 
-                        if let Some(tree_node) = e.tree_tx {
-                            let level = tree_node.level as usize;
-                            let level_index = tree_node.level_index as usize;
-                            match e.batch_tree_event_type {
-                                BatchTreeEventType::Vtxo => {
-                                    vtxo_tree.insert(tree_node, level, level_index);
-                                }
-                                BatchTreeEventType::Connector => {
-                                    connectors_tree.insert(tree_node, level, level_index);
-                                }
+                        match e.batch_tree_event_type {
+                            BatchTreeEventType::Vtxo => {
+                                match &mut vtxo_graph_chunks {
+                                    Some(vtxo_graph_chunks) => {
+                                        vtxo_graph_chunks.push(e.tx_graph_chunk)
+                                    }
+                                    None => {
+                                        return Err(Error::ark_server(
+                                            "received unexpected VTXO graph chunk",
+                                        ))
+                                    }
+                                };
+                            }
+                            BatchTreeEventType::Connector => {
+                                match connectors_graph_chunks {
+                                    Some(ref mut connectors_graph_chunks) => {
+                                        connectors_graph_chunks.push(e.tx_graph_chunk)
+                                    }
+                                    None => {
+                                        return Err(Error::ark_server(
+                                            "received unexpected connectors graph chunk",
+                                        ))
+                                    }
+                                };
                             }
                         }
                     }
@@ -430,13 +445,26 @@ where
                             continue;
                         }
 
-                        let level = e.level as usize;
-                        let level_index = e.level_index as usize;
                         match e.batch_tree_event_type {
                             BatchTreeEventType::Vtxo => {
-                                let node = vtxo_tree.get_mut(level, level_index)?;
+                                match vtxo_graph {
+                                    Some(ref mut vtxo_graph) => {
+                                        vtxo_graph.apply(|graph| {
+                                            if graph.root().unsigned_tx.compute_txid() != e.txid {
+                                                Ok(true)
+                                            } else {
+                                                graph.set_signature(e.signature);
 
-                                node.tx.inputs[VTXO_INPUT_INDEX].tap_key_sig = Some(e.signature);
+                                                Ok(false)
+                                            }
+                                        })?;
+                                    }
+                                    None => {
+                                        return Err(Error::ark_server(
+                                            "received batch tree signature without TX graph",
+                                        ));
+                                    }
+                                };
                             }
                             BatchTreeEventType::Connector => {
                                 return Err(Error::ark_server(
@@ -449,6 +477,11 @@ where
                         if step != RoundStep::BatchStarted {
                             continue;
                         }
+
+                        let chunks = vtxo_graph_chunks.take().ok_or(Error::ark_server(
+                            "received tree signing started event without VTXO graph chunks",
+                        ))?;
+                        vtxo_graph = Some(TxGraph::new(chunks)?);
 
                         tracing::info!(round_id = e.id, "Round signing started");
 
@@ -466,7 +499,7 @@ where
                             let own_cosigner_pk = own_cosigner_kp.public_key();
                             let nonce_tree = generate_nonce_tree(
                                 rng,
-                                &vtxo_tree,
+                                vtxo_graph.as_ref().expect("VTXO graph"),
                                 own_cosigner_pk,
                                 &e.unsigned_round_tx,
                             )
@@ -482,7 +515,7 @@ where
                                 .submit_tree_nonces(
                                     &e.id,
                                     own_cosigner_pk,
-                                    nonce_tree.to_pub_nonce_tree().into_inner(),
+                                    nonce_tree.to_nonce_pks(),
                                 )
                                 .await
                                 .map_err(Error::ark_server)
@@ -491,9 +524,8 @@ where
                             our_nonce_tree_map.insert(own_cosigner_kp, nonce_tree);
                         }
 
-                        our_nonce_trees = Some(our_nonce_tree_map);
-
                         unsigned_round_tx = Some(e.unsigned_round_tx);
+                        our_nonce_trees = Some(our_nonce_tree_map);
 
                         step = step.next();
                         continue;
@@ -503,7 +535,7 @@ where
                             continue;
                         }
 
-                        let agg_pub_nonce_tree = PubNonceTree::from(e.tree_nonces);
+                        let agg_pub_nonce_tree = e.tree_nonces;
 
                         tracing::debug!(
                             round_id = e.id,
@@ -511,20 +543,31 @@ where
                             "Round combined nonces generated"
                         );
 
-                        let unsigned_round_tx = unsigned_round_tx
-                            .as_ref()
-                            .ok_or(Error::ark_server("missing round TX during round protocol"))?;
-
                         let our_nonce_trees = our_nonce_trees.take().ok_or(Error::ark_server(
                             "missing nonce tree during round protocol",
                         ))?;
+
+                        let vtxo_graph = match vtxo_graph {
+                            Some(ref vtxo_graph) => vtxo_graph,
+                            None => {
+                                let chunks = vtxo_graph_chunks.take().ok_or(Error::ark_server(
+                                    "received tree nonces aggregated event without VTXO graph chunks",
+                                ))?;
+
+                                &TxGraph::new(chunks)?
+                            }
+                        };
+
+                        let unsigned_round_tx = unsigned_round_tx
+                            .as_ref()
+                            .ok_or_else(|| Error::ad_hoc("missing round TX"))?;
 
                         for (cosigner_kp, our_nonce_tree) in our_nonce_trees {
                             let partial_sig_tree = sign_vtxo_tree(
                                 server_info.vtxo_tree_expiry,
                                 ark_server_pk,
                                 &cosigner_kp,
-                                &vtxo_tree,
+                                vtxo_graph,
                                 unsigned_round_tx,
                                 our_nonce_tree,
                                 &agg_pub_nonce_tree,
@@ -536,7 +579,7 @@ where
                                 .submit_tree_signatures(
                                     &e.id,
                                     cosigner_kp.public_key(),
-                                    partial_sig_tree.into_inner(),
+                                    partial_sig_tree,
                                 )
                                 .await
                                 .map_err(Error::ark_server)
@@ -549,17 +592,28 @@ where
                         if step != RoundStep::RoundSigningNoncesGenerated {
                             continue;
                         }
-                        tracing::debug!(round_id = e.id, "Round finalization started");
 
-                        let signed_forfeit_psbts = create_and_sign_forfeit_txs(
-                            self.kp(),
-                            vtxo_inputs.as_slice(),
-                            &connectors_tree,
-                            &e.connectors_index,
-                            &server_info.forfeit_address,
-                            server_info.dust,
-                        )
-                        .map_err(Error::from)?;
+                        let signed_forfeit_psbts = if !vtxo_inputs.is_empty() {
+                            let chunks =
+                                connectors_graph_chunks.take().ok_or(Error::ark_server(
+                                    "received batch finalization event without connectors",
+                                ))?;
+                            let connectors_graph = TxGraph::new(chunks)?;
+
+                            tracing::debug!(round_id = e.id, "Round finalization started");
+
+                            create_and_sign_forfeit_txs(
+                                self.kp(),
+                                vtxo_inputs.as_slice(),
+                                &connectors_graph,
+                                &e.connectors_index,
+                                &server_info.forfeit_address,
+                                server_info.dust,
+                            )
+                            .map_err(Error::from)?
+                        } else {
+                            Vec::new()
+                        };
 
                         let round_psbt = if onchain_inputs.is_empty() {
                             None

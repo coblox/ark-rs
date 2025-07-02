@@ -2,8 +2,9 @@ use crate::anchor_output;
 use crate::conversions::from_musig_xonly;
 use crate::conversions::to_musig_pk;
 use crate::internal_node::VtxoTreeInternalNodeScript;
-use crate::server::TxTree;
-use crate::server::TxTreeNode;
+use crate::server::NoncePks;
+use crate::server::PartialSigTree;
+use crate::server::TxGraph;
 use crate::BoardingOutput;
 use crate::Error;
 use crate::ErrorContext;
@@ -29,6 +30,7 @@ use bitcoin::TapSighashType;
 use bitcoin::Transaction;
 use bitcoin::TxIn;
 use bitcoin::TxOut;
+use bitcoin::Txid;
 use bitcoin::XOnlyPublicKey;
 use musig::musig;
 use rand::CryptoRng;
@@ -123,156 +125,123 @@ impl VtxoInput {
 /// copied. We use the [`Option`] to move it into the [`NonceTree`] during nonce generation, and out
 /// of the [`NonceTree`] when signing the VTXO tree.
 #[allow(clippy::type_complexity)]
-pub struct NonceTree(Vec<Vec<Option<(Option<musig::SecretNonce>, musig::PublicNonce)>>>);
+pub struct NonceKps(HashMap<Txid, (Option<musig::SecretNonce>, musig::PublicNonce)>);
 
-impl NonceTree {
-    /// Take ownership of the [`MusigSecNonce`] at level `i` and branch `j` in the tree.
+impl NonceKps {
+    /// Take ownership of the [`MusigSecNonce`] for the transaction identified by `txid`.
     ///
     /// The caller must take ownership because the [`MusigSecNonce`] ensures that it can only be
     /// used once, to avoid nonce reuse.
-    pub fn take_sk(&mut self, i: usize, j: usize) -> Option<musig::SecretNonce> {
-        self.0
-            .get_mut(i)
-            .and_then(|level| {
-                level
-                    .get_mut(j)
-                    .map(|v| v.as_mut().and_then(|(sec, _)| sec.take()))
-            })
-            .flatten()
+    pub fn take_sk(&mut self, txid: &Txid) -> Option<musig::SecretNonce> {
+        self.0.get_mut(txid).and_then(|(sec, _)| sec.take())
     }
 
-    /// Convert into a tree of public nonces.
-    pub fn to_pub_nonce_tree(&self) -> PubNonceTree {
-        let pub_nonce_tree = self
+    /// Convert into [`NoncePks`].
+    pub fn to_nonce_pks(&self) -> NoncePks {
+        let nonce_pks = self
             .0
             .iter()
-            .map(|level| {
-                level
-                    .iter()
-                    .map(|v| v.as_ref().map(|(_, pub_nonce)| *pub_nonce))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+            .map(|(txid, (_, pub_nonce))| (*txid, *pub_nonce))
+            .collect::<HashMap<_, _>>();
 
-        PubNonceTree(pub_nonce_tree)
-    }
-}
-
-/// A public nonce per shared internal (non-leaf) node in the VTXO tree.
-#[derive(Debug)]
-pub struct PubNonceTree(Vec<Vec<Option<musig::PublicNonce>>>);
-
-impl PubNonceTree {
-    /// Get the [`MusigPubNonce`] at level `i` and branch `j` in the tree.
-    pub fn get(&self, i: usize, j: usize) -> Option<musig::PublicNonce> {
-        self.0
-            .get(i)
-            .and_then(|level| level.get(j))
-            .copied()
-            .flatten()
-    }
-
-    /// Get the underlying matrix of [`MusigPubNonce`]s.
-    pub fn into_inner(self) -> Vec<Vec<Option<musig::PublicNonce>>> {
-        self.0
-    }
-}
-
-impl From<Vec<Vec<Option<musig::PublicNonce>>>> for PubNonceTree {
-    fn from(value: Vec<Vec<Option<musig::PublicNonce>>>) -> Self {
-        Self(value)
+        NoncePks::new(nonce_pks)
     }
 }
 
 /// Generate a nonce pair for each internal (non-leaf) node in the VTXO tree.
 pub fn generate_nonce_tree<R>(
     rng: &mut R,
-    unsigned_vtxo_tree: &TxTree,
+    unsigned_vtxo_graph: &TxGraph,
     own_cosigner_pk: PublicKey,
     round_tx: &Psbt,
-) -> Result<NonceTree, Error>
+) -> Result<NonceKps, Error>
 where
     R: Rng + CryptoRng,
 {
     let secp_musig = ::musig::Secp256k1::new();
 
-    let nonce_tree = unsigned_vtxo_tree
-        .iter_levels()
-        .map(|(i, level_nodes)| {
-            level_nodes
-                .iter()
-                .map(|node| {
-                    let cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(&node.tx)?;
+    let tx_map = unsigned_vtxo_graph.as_map();
 
-                    if !cosigner_pks.contains(&own_cosigner_pk) {
-                        return Ok(None);
-                    }
+    let nonce_tree = tx_map
+        .iter()
+        .map(|(txid, node_tx)| {
+            let cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(node_tx)?;
 
-                    // TODO: We would like to use our own RNG here, but this library is using a
-                    // different version of `rand`. I think it's not worth the hassle at this stage,
-                    // particularly because this duplicated dependency will go away anyway.
-                    let session_id = musig::SessionSecretRand::new();
-                    let extra_rand = rng.gen();
+            if !cosigner_pks.contains(&own_cosigner_pk) {
+                return Err(Error::crypto(format!(
+                    "cosigner PKs does not contain {own_cosigner_pk} for TX {txid}"
+                )));
+            }
 
-                    let msg = virtual_tx_sighash(node, unsigned_vtxo_tree, i, round_tx)?;
+            // TODO: We would like to use our own RNG here, but this library is using a
+            // different version of `rand`. I think it's not worth the hassle at this stage,
+            // particularly because this duplicated dependency will go away anyway.
+            let session_id = musig::SessionSecretRand::new();
+            let extra_rand = rng.gen();
 
-                    let key_agg_cache = {
-                        let cosigner_pks = cosigner_pks
-                            .iter()
-                            .map(|pk| to_musig_pk(*pk))
-                            .collect::<Vec<_>>();
-                        musig::KeyAggCache::new(
-                            &secp_musig,
-                            &cosigner_pks.iter().collect::<Vec<_>>(),
-                        )
-                    };
+            let msg = virtual_tx_sighash(node_tx, &tx_map, round_tx)?;
 
-                    let (nonce, pub_nonce) = key_agg_cache.nonce_gen(
-                        &secp_musig,
-                        session_id,
-                        to_musig_pk(own_cosigner_pk),
-                        msg,
-                        extra_rand,
-                    );
+            let key_agg_cache = {
+                let cosigner_pks = cosigner_pks
+                    .iter()
+                    .map(|pk| to_musig_pk(*pk))
+                    .collect::<Vec<_>>();
+                musig::KeyAggCache::new(&secp_musig, &cosigner_pks.iter().collect::<Vec<_>>())
+            };
 
-                    Ok(Some((Some(nonce), pub_nonce)))
-                })
-                .collect::<Result<Vec<_>, _>>()
+            let (nonce, pub_nonce) = key_agg_cache.nonce_gen(
+                &secp_musig,
+                session_id,
+                to_musig_pk(own_cosigner_pk),
+                msg,
+                extra_rand,
+            );
+
+            Ok((*txid, (Some(nonce), pub_nonce)))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<HashMap<_, _>, _>>()?;
 
-    Ok(NonceTree(nonce_tree))
+    Ok(NonceKps(nonce_tree))
 }
 
 fn virtual_tx_sighash(
     // The virtual transaction to be signed.
-    node: &TxTreeNode,
-    // The entire VTXO tree, so that the parent output can be found, if needed.
-    vtxo_tree: &TxTree,
-    // How deep in the VTXO tree this virtual transaction is.
-    level: usize,
+    node_tx: &Psbt,
+    // The entire virtual TX set for this batch, so that the parent output can be found, if needed.
+    tx_map: &HashMap<Txid, &Psbt>,
     // The round transaction, in case it is the parent VTXO.
     round_tx: &Psbt,
 ) -> Result<::musig::Message, Error> {
-    let tx = &node.tx.unsigned_tx;
+    let tx = &node_tx.unsigned_tx;
 
     // We expect a single input to a VTXO.
-    let parent_txid = node.parent_txid;
+    let previous_output = tx.input[VTXO_INPUT_INDEX].previous_output;
 
-    let input_vout = tx.input[VTXO_INPUT_INDEX].previous_output.vout as usize;
-    let prevout = if level == 0 {
-        round_tx.clone().unsigned_tx.output[input_vout].clone()
-    } else {
-        let parent_level = vtxo_tree.get_level(level - 1);
-        let parent_tx = parent_level
-            .iter()
-            .find_map(|node| (node.txid == parent_txid).then_some(node.tx.unsigned_tx.clone()))
-            .ok_or(Error::crypto("missing parent for VTXO {i}, {j}"))?;
+    let parent_tx = tx_map
+        .get(&previous_output.txid)
+        .or_else(|| {
+            (previous_output.txid == round_tx.unsigned_tx.compute_txid()).then_some(&round_tx)
+        })
+        .ok_or_else(|| {
+            Error::crypto(format!(
+                "parent transaction {} not found for virtual TX {}",
+                previous_output.txid,
+                node_tx.unsigned_tx.compute_txid()
+            ))
+        })?;
+    let previous_output = parent_tx
+        .unsigned_tx
+        .output
+        .get(previous_output.vout as usize)
+        .ok_or_else(|| {
+            Error::crypto(format!(
+                "previous output {} not found for virtual TX {}",
+                previous_output,
+                node_tx.unsigned_tx.compute_txid()
+            ))
+        })?;
 
-        parent_tx.output[input_vout].clone()
-    };
-
-    let prevouts = [prevout];
+    let prevouts = [previous_output];
     let prevouts = Prevouts::All(&prevouts);
 
     // Here we are generating a key spend sighash, because the VTXO tree outputs are signed
@@ -286,16 +255,6 @@ fn virtual_tx_sighash(
     Ok(msg)
 }
 
-/// A Musig partial signature per shared internal (non-leaf) node in the VTXO tree.
-pub struct PartialSigTree(Vec<Vec<Option<musig::PartialSignature>>>);
-
-impl PartialSigTree {
-    /// Get the underlying matrix of [`MusigPartialSignature`]s.
-    pub fn into_inner(self) -> Vec<Vec<Option<musig::PartialSignature>>> {
-        self.0
-    }
-}
-
 /// Sign each shared internal (non-leaf) node of the VTXO tree with `own_cosigner_kp` and using
 /// `our_nonce_tree` to provide our share of each aggregate nonce.
 #[allow(clippy::too_many_arguments)]
@@ -303,10 +262,10 @@ pub fn sign_vtxo_tree(
     vtxo_tree_expiry: bitcoin::Sequence,
     server_pk: XOnlyPublicKey,
     own_cosigner_kp: &Keypair,
-    vtxo_tree: &TxTree,
+    vtxo_graph: &TxGraph,
     round_tx: &Psbt,
-    mut our_nonce_tree: NonceTree,
-    aggregate_pub_nonce_tree: &PubNonceTree,
+    mut our_nonce_kps: NonceKps,
+    aggregate_nonce_pks: &NoncePks,
 ) -> Result<PartialSigTree, Error> {
     let own_cosigner_pk = own_cosigner_kp.public_key();
 
@@ -319,60 +278,60 @@ pub fn sign_vtxo_tree(
         ::musig::Keypair::from_seckey_slice(&secp_musig, &own_cosigner_kp.secret_bytes())
             .expect("valid keypair");
 
-    let mut partial_sig_tree: Vec<Vec<Option<musig::PartialSignature>>> = Vec::new();
-    for (i, level_nodes) in vtxo_tree.iter_levels() {
-        let mut sigs_level = Vec::new();
-        for (j, node) in level_nodes.iter().enumerate() {
-            let mut cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(&node.tx)?;
-            cosigner_pks.sort_by_key(|k| k.serialize());
+    let tx_map = vtxo_graph.as_map();
 
-            if !cosigner_pks.contains(&own_cosigner_pk) {
-                sigs_level.push(None);
-                continue;
-            }
+    let mut partial_sig_tree = HashMap::new();
+    for (node_txid, node_tx) in tx_map.iter() {
+        let mut cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(node_tx)?;
+        cosigner_pks.sort_by_key(|k| k.serialize());
 
-            tracing::debug!(i, j, ?node, "Generating partial signature");
-
-            let mut key_agg_cache = {
-                let cosigner_pks = cosigner_pks
-                    .iter()
-                    .map(|pk| to_musig_pk(*pk))
-                    .collect::<Vec<_>>();
-                musig::KeyAggCache::new(&secp_musig, &cosigner_pks.iter().collect::<Vec<_>>())
-            };
-
-            let sweep_tap_tree = internal_node_script
-                .sweep_spend_leaf(&secp, from_musig_xonly(key_agg_cache.agg_pk()));
-
-            let tweak = ::musig::Scalar::from(
-                ::musig::SecretKey::from_slice(sweep_tap_tree.tap_tweak().as_byte_array())
-                    .expect("valid conversion"),
-            );
-
-            key_agg_cache
-                .pubkey_xonly_tweak_add(&secp_musig, &tweak)
-                .map_err(Error::crypto)?;
-
-            let agg_pub_nonce = aggregate_pub_nonce_tree
-                .get(i, j)
-                .ok_or_else(|| Error::crypto(format!("missing pub nonce {i}, {j}")))?;
-
-            // Equivalent to parsing the individual `MusigAggNonce` from a slice.
-            let agg_nonce = musig::AggregatedNonce::new(&secp_musig, &[&agg_pub_nonce]);
-
-            let msg = virtual_tx_sighash(node, vtxo_tree, i, round_tx)?;
-
-            let nonce_sk = our_nonce_tree
-                .take_sk(i, j)
-                .ok_or(Error::crypto("missing nonce {i}, {j}"))?;
-
-            let sig = musig::Session::new(&secp_musig, &key_agg_cache, agg_nonce, msg)
-                .partial_sign(&secp_musig, nonce_sk, &own_cosigner_kp, &key_agg_cache);
-
-            sigs_level.push(Some(sig));
+        if !cosigner_pks.contains(&own_cosigner_pk) {
+            continue;
         }
 
-        partial_sig_tree.push(sigs_level);
+        tracing::debug!(%node_txid, "Generating partial signature");
+
+        let mut key_agg_cache = {
+            let cosigner_pks = cosigner_pks
+                .iter()
+                .map(|pk| to_musig_pk(*pk))
+                .collect::<Vec<_>>();
+            musig::KeyAggCache::new(&secp_musig, &cosigner_pks.iter().collect::<Vec<_>>())
+        };
+
+        let sweep_tap_tree =
+            internal_node_script.sweep_spend_leaf(&secp, from_musig_xonly(key_agg_cache.agg_pk()));
+
+        let tweak = ::musig::Scalar::from(
+            ::musig::SecretKey::from_slice(sweep_tap_tree.tap_tweak().as_byte_array())
+                .expect("valid conversion"),
+        );
+
+        key_agg_cache
+            .pubkey_xonly_tweak_add(&secp_musig, &tweak)
+            .map_err(Error::crypto)?;
+
+        let agg_pub_nonce = aggregate_nonce_pks.get(node_txid).ok_or_else(|| {
+            Error::crypto(format!("missing pub nonce for virtual TX {node_txid}"))
+        })?;
+
+        // Equivalent to parsing the individual `MusigAggNonce` from a slice.
+        let agg_nonce = musig::AggregatedNonce::new(&secp_musig, &[&agg_pub_nonce]);
+
+        let msg = virtual_tx_sighash(node_tx, &tx_map, round_tx)?;
+
+        let nonce_sk = our_nonce_kps
+            .take_sk(node_txid)
+            .ok_or(Error::crypto("missing nonce for virtual TX {node_txid}"))?;
+
+        let sig = musig::Session::new(&secp_musig, &key_agg_cache, agg_nonce, msg).partial_sign(
+            &secp_musig,
+            nonce_sk,
+            &own_cosigner_kp,
+            &key_agg_cache,
+        );
+
+        partial_sig_tree.insert(*node_txid, sig);
     }
 
     Ok(PartialSigTree(partial_sig_tree))
@@ -385,7 +344,7 @@ pub fn create_and_sign_forfeit_txs(
     // `Sign` trait, so that the caller can find the secret key for the given `VtxoInput`.
     kp: &Keypair,
     vtxo_inputs: &[VtxoInput],
-    connector_tree: &TxTree,
+    connectors_graph: &TxGraph,
     connector_index: &HashMap<OutPoint, OutPoint>,
     server_forfeit_address: &Address,
     // As defined by the server.
@@ -417,24 +376,23 @@ pub fn create_and_sign_forfeit_txs(
             ))
         })?;
 
-        let mut connector_psbts = connector_tree.txs();
-        let connector_psbt = connector_psbts
-            .find(|tx| {
-                let computed_connector_txid = tx.compute_txid();
-
-                computed_connector_txid == connector_outpoint.txid
-            })
+        let connector_node = connectors_graph
+            .find(&connector_outpoint.txid)
             .ok_or_else(|| {
                 Error::ad_hoc(format!(
                     "connector PSBT missing for VTXO outpoint {vtxo_outpoint}"
                 ))
             })?;
 
-        let connector_output = connector_psbt
-            .tx_out(connector_outpoint.vout as usize)
-            .map_err(Error::ad_hoc)
-            .with_context(|| {
-                format!("connector output missing for VTXO outpoint {vtxo_outpoint}")
+        let connector_output = connector_node
+            .root()
+            .unsigned_tx
+            .output
+            .get(connector_outpoint.vout as usize)
+            .ok_or_else(|| {
+                Error::ad_hoc(format!(
+                    "connector output missing for VTXO outpoint {vtxo_outpoint}"
+                ))
             })?;
 
         let forfeit_output = TxOut {
