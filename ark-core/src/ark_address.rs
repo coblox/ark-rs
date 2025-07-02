@@ -8,6 +8,7 @@ use bitcoin::XOnlyPublicKey;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ArkAddress {
+    version: u8,
     hrp: Hrp,
     server: XOnlyPublicKey,
     vtxo_tap_key: TweakedPublicKey,
@@ -33,6 +34,7 @@ impl ArkAddress {
         let hrp = Hrp::parse_unchecked(hrp);
 
         Self {
+            version: 0,
             hrp,
             server,
             vtxo_tap_key,
@@ -40,10 +42,12 @@ impl ArkAddress {
     }
 
     pub fn encode(&self) -> String {
-        let mut bytes = [0u8; 64];
+        let mut bytes = [0u8; 65];
 
-        bytes[..32].copy_from_slice(&self.server.serialize());
-        bytes[32..].copy_from_slice(&self.vtxo_tap_key.serialize());
+        bytes[0] = self.version;
+
+        bytes[1..33].copy_from_slice(&self.server.serialize());
+        bytes[33..].copy_from_slice(&self.vtxo_tap_key.serialize());
 
         bech32::encode::<Bech32m>(self.hrp, bytes.as_slice()).expect("data can be encoded")
     }
@@ -51,15 +55,18 @@ impl ArkAddress {
     pub fn decode(value: &str) -> Result<Self, Error> {
         let (hrp, bytes) = bech32::decode(value).map_err(Error::address_format)?;
 
-        let server = XOnlyPublicKey::from_slice(&bytes[..32]).map_err(Error::address_format)?;
+        let version = bytes[0];
+
+        let server = XOnlyPublicKey::from_slice(&bytes[1..33]).map_err(Error::address_format)?;
         let vtxo_tap_key =
-            XOnlyPublicKey::from_slice(&bytes[32..]).map_err(Error::address_format)?;
+            XOnlyPublicKey::from_slice(&bytes[33..]).map_err(Error::address_format)?;
 
         // It is safe to call `dangerous_assume_tweaked` because we are treating the VTXO tap key as
         // finished product i.e. we are only going to use it as an address to send coins to.
         let vtxo_tap_key = TweakedPublicKey::dangerous_assume_tweaked(vtxo_tap_key);
 
         Ok(Self {
+            version,
             hrp,
             server,
             vtxo_tap_key,
@@ -78,15 +85,18 @@ mod tests {
     use super::*;
     use bitcoin::hex::DisplayHex;
 
-    // Taken from https://github.com/ark-network/ark/blob/b536a9e65252573aaa48110ef5d0c90894eb550c/common/fixtures/encoding.json.
+    // Taken from https://github.com/arkade-os/arkd/blob/b2c4a6ea6ab1a5a4078c578bcfca650ed19dc4ec/common/fixtures/encoding.json.
     #[test]
     fn roundtrip() {
-        let address = "tark1x0lm8hhr2wc6n6lyemtyh9rz8rg2ftpkfun46aca56kjg3ws0tsztfpuanaquxc6faedvjk3tax0575y6perapg3e95654pk8r4fjecs5fyd2";
+        let address = "tark1qqellv77udfmr20tun8dvju5vgudpf9vxe8jwhthrkn26fz96pawqfdy8nk05rsmrf8h94j26905e7n6sng8y059z8ykn2j5xcuw4xt846qj6x";
 
         let decoded = ArkAddress::decode(address).unwrap();
 
         let hrp = decoded.hrp.to_string();
         assert_eq!(hrp, "tark");
+
+        let version = decoded.version;
+        assert_eq!(version, 0);
 
         let server = decoded.server.serialize().as_hex().to_string();
         assert_eq!(

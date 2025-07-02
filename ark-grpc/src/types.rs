@@ -5,6 +5,7 @@ use bitcoin::address::NetworkUnchecked;
 use bitcoin::Address;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
+use bitcoin::ScriptBuf;
 use std::str::FromStr;
 
 #[derive(Clone, Debug)]
@@ -121,6 +122,8 @@ impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VtxoOutPoint {
             vout: outpoint.vout,
         };
 
+        let script = ScriptBuf::from_hex(&value.script).map_err(Error::conversion)?;
+
         let spent_by = match value.spent_by.is_empty() {
             true => None,
             false => Some(value.spent_by.parse().map_err(Error::conversion)?),
@@ -133,7 +136,7 @@ impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VtxoOutPoint {
             created_at: value.created_at,
             expires_at: value.expires_at,
             amount: Amount::from_sat(value.amount),
-            script: value.script.clone(),
+            script,
             is_preconfirmed: value.is_preconfirmed,
             is_swept: value.is_swept,
             is_redeemed: value.is_redeemed,
@@ -154,6 +157,8 @@ impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
             vout: outpoint.vout,
         };
 
+        let script = ScriptBuf::from_hex(&value.script).map_err(Error::conversion)?;
+
         let spent_by = match value.spent_by.is_empty() {
             true => None,
             false => Some(value.spent_by.parse().map_err(Error::conversion)?),
@@ -166,7 +171,7 @@ impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
             created_at: value.created_at,
             expires_at: value.expires_at,
             amount: Amount::from_sat(value.amount),
-            script: value.script.clone(),
+            script,
             is_preconfirmed: value.preconfirmed,
             is_swept: value.swept,
             is_redeemed: value.redeemed,

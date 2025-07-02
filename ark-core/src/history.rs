@@ -301,6 +301,7 @@ pub fn generate_outgoing_vtxo_transaction_history(
 mod tests {
     use super::*;
     use bitcoin::OutPoint;
+    use bitcoin::ScriptBuf;
 
     // These tests are taken straight from the Go client.
 
@@ -322,9 +323,7 @@ mod tests {
             created_at: 1730330127,
             expires_at: 1730934927,
             amount: Amount::from_sat(20_000),
-            script: "fc3ed4822401bc75858c6a7e08a974c68a777bcf87e6ba535d48afab7d00cf5f"
-                .parse()
-                .unwrap(),
+            script: ScriptBuf::new(),
             is_preconfirmed: false,
             is_swept: false,
             is_redeemed: false,
@@ -363,9 +362,7 @@ mod tests {
             created_at: 1730330256,
             expires_at: 1730934927,
             amount: Amount::from_sat(18_784),
-            script: "fc3ed4822401bc75858c6a7e08a974c68a777bcf87e6ba535d48afab7d00cf5f"
-                .parse()
-                .unwrap(),
+            script: ScriptBuf::new(),
             is_preconfirmed: true,
             is_swept: false,
             is_redeemed: false,
@@ -390,9 +387,7 @@ mod tests {
             created_at: 1730330127,
             expires_at: 1730934927,
             amount: Amount::from_sat(20_000),
-            script: "fc3ed4822401bc75858c6a7e08a974c68a777bcf87e6ba535d48afab7d00cf5f"
-                .parse()
-                .unwrap(),
+            script: ScriptBuf::new(),
             is_preconfirmed: false,
             is_swept: false,
             is_redeemed: false,
@@ -445,9 +440,7 @@ mod tests {
                 created_at: 1730330256,
                 expires_at: 1730934927,
                 amount: Amount::from_sat(1_000),
-                script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                    .parse()
-                    .unwrap(),
+                script: ScriptBuf::new(),
                 is_preconfirmed: true,
                 is_swept: false,
                 is_redeemed: false,
@@ -467,9 +460,7 @@ mod tests {
                 created_at: 1730330748,
                 expires_at: 1730935548,
                 amount: Amount::from_sat(2_000),
-                script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                    .parse()
-                    .unwrap(),
+                script: ScriptBuf::new(),
                 is_preconfirmed: true,
                 is_swept: false,
                 is_redeemed: false,
@@ -529,9 +520,7 @@ mod tests {
             created_at: 1730331035,
             expires_at: 1730935835,
             amount: Amount::from_sat(3_000),
-            script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                .parse()
-                .unwrap(),
+            script: ScriptBuf::new(),
             is_preconfirmed: false,
             is_swept: false,
             is_redeemed: false,
@@ -553,9 +542,7 @@ mod tests {
                 created_at: 1730330256,
                 expires_at: 1730934927,
                 amount: Amount::from_sat(1_000),
-                script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                    .parse()
-                    .unwrap(),
+                script: ScriptBuf::new(),
                 is_preconfirmed: true,
                 is_swept: false,
                 is_redeemed: false,
@@ -579,9 +566,7 @@ mod tests {
                 created_at: 1730330748,
                 expires_at: 1730935548,
                 amount: Amount::from_sat(2_000),
-                script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                    .parse()
-                    .unwrap(),
+                script: ScriptBuf::new(),
                 is_preconfirmed: true,
                 is_swept: false,
                 is_redeemed: false,
@@ -643,9 +628,7 @@ mod tests {
             created_at: 1730331198,
             expires_at: 1730935835,
             amount: Amount::from_sat(684),
-            script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                .parse()
-                .unwrap(),
+            script: ScriptBuf::new(),
             is_preconfirmed: true,
             is_swept: false,
             is_redeemed: false,
@@ -667,9 +650,7 @@ mod tests {
                 created_at: 1730330256,
                 expires_at: 1730934927,
                 amount: Amount::from_sat(1_000),
-                script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                    .parse()
-                    .unwrap(),
+                script: ScriptBuf::new(),
                 is_preconfirmed: true,
                 is_swept: false,
                 is_redeemed: false,
@@ -693,9 +674,7 @@ mod tests {
                 created_at: 1730330748,
                 expires_at: 1730935548,
                 amount: Amount::from_sat(2_000),
-                script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                    .parse()
-                    .unwrap(),
+                script: ScriptBuf::new(),
                 is_preconfirmed: true,
                 is_swept: false,
                 is_redeemed: false,
@@ -719,9 +698,7 @@ mod tests {
                 created_at: 1730331035,
                 expires_at: 1730935835,
                 amount: Amount::from_sat(3_000),
-                script: "aa586eb052ebf1e676f6df4eaf3591c90d56a979871aefa9b67e5618cb7c0f25"
-                    .parse()
-                    .unwrap(),
+                script: ScriptBuf::new(),
                 is_preconfirmed: false,
                 is_swept: false,
                 is_redeemed: false,

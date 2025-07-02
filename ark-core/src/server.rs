@@ -10,6 +10,7 @@ use bitcoin::Amount;
 use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::Psbt;
+use bitcoin::ScriptBuf;
 use bitcoin::Transaction;
 use bitcoin::Txid;
 use musig::musig;
@@ -263,7 +264,7 @@ pub struct VtxoOutPoint {
     pub created_at: i64,
     pub expires_at: i64,
     pub amount: Amount,
-    pub script: String,
+    pub script: ScriptBuf,
     /// A pre-confirmed VTXO spends from another VTXO and is not a leaf of the original VTXO tree
     /// in a batch.
     pub is_preconfirmed: bool,
