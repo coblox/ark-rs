@@ -7,6 +7,8 @@ use anyhow::Result;
 use ark_core::boarding_output::list_boarding_outpoints;
 use ark_core::boarding_output::BoardingOutpoints;
 use ark_core::coin_select::select_vtxos;
+use ark_core::generate_incoming_vtxo_transaction_history;
+use ark_core::generate_outgoing_vtxo_transaction_history;
 use ark_core::proof_of_funds;
 use ark_core::redeem;
 use ark_core::redeem::build_offchain_transactions;
@@ -19,6 +21,7 @@ use ark_core::round::generate_nonce_tree;
 use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::server::BatchTreeEventType;
+use ark_core::server::GetVtxosRequest;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::VtxoOutPoint;
 use ark_core::sort_transactions_by_created_at;
@@ -369,17 +372,19 @@ async fn main() -> Result<()> {
 async fn spendable_vtxos(
     grpc_client: &ark_grpc::Client,
     vtxos: &[Vtxo],
-    select_recoverable_vtxos: bool,
+    include_recoverable_vtxos: bool,
 ) -> Result<HashMap<Vtxo, Vec<VtxoOutPoint>>> {
     let mut spendable_vtxos = HashMap::new();
     for vtxo in vtxos.iter() {
-        // The VTXOs for the given Ark address that the Ark server tells us about.
-        let vtxo_outpoints = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
+        let request = GetVtxosRequest::new_for_addresses(&[vtxo.to_ark_address()]);
 
-        let spendable = if select_recoverable_vtxos {
-            vtxo_outpoints.spendable_with_recoverable()
+        // The VTXOs for the given Ark address that the Ark server tells us about.
+        let list = grpc_client.list_vtxos(request).await?;
+
+        let spendable = if include_recoverable_vtxos {
+            list.spendable_with_recoverable()
         } else {
-            vtxo_outpoints.spendable().to_vec()
+            list.spendable().to_vec()
         };
 
         spendable_vtxos.insert(vtxo.clone(), spendable);
@@ -806,18 +811,49 @@ async fn transaction_history(
         }
     }
 
-    let mut offchain_transactions = Vec::new();
-    for vtxo in vtxos.iter() {
-        let txs = grpc_client.get_tx_history(&vtxo.to_ark_address()).await?;
+    let runtime = tokio::runtime::Handle::current();
 
-        for tx in txs {
-            if !boarding_round_transactions.contains(&tx.txid()) {
-                offchain_transactions.push(tx);
-            }
-        }
+    let mut incoming_transactions = Vec::new();
+    let mut outgoing_transactions = Vec::new();
+    for vtxo in vtxos.iter() {
+        let request = GetVtxosRequest::new_for_addresses(&[vtxo.to_ark_address()]);
+        let vtxo_list = grpc_client.list_vtxos(request).await?;
+
+        let mut new_incoming_transactions = generate_incoming_vtxo_transaction_history(
+            vtxo_list.spent(),
+            vtxo_list.spendable(),
+            &boarding_round_transactions,
+        )?;
+
+        incoming_transactions.append(&mut new_incoming_transactions);
+
+        let mut new_outgoing_transactions = generate_outgoing_vtxo_transaction_history(
+            vtxo_list.spent(),
+            vtxo_list.spendable(),
+            |outpoint: OutPoint| {
+                block_in_place(|| {
+                    runtime.block_on(async {
+                        let request = GetVtxosRequest::new_for_outpoints(&[outpoint]);
+                        let list = grpc_client
+                            .list_vtxos(request)
+                            .await
+                            .map_err(ark_core::Error::ad_hoc)?;
+
+                        Ok(list.all().first().cloned())
+                    })
+                })
+            },
+        )?;
+
+        outgoing_transactions.append(&mut new_outgoing_transactions);
     }
 
-    let mut txs = [boarding_transactions, offchain_transactions].concat();
+    let mut txs = [
+        boarding_transactions,
+        incoming_transactions,
+        outgoing_transactions,
+    ]
+    .concat();
 
     sort_transactions_by_created_at(&mut txs);
 

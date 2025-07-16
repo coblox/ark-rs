@@ -24,6 +24,8 @@ pub use ark_address::ArkAddress;
 pub use boarding_output::BoardingOutput;
 pub use error::Error;
 pub use error::ErrorContext;
+pub use history::generate_incoming_vtxo_transaction_history;
+pub use history::generate_outgoing_vtxo_transaction_history;
 pub use history::sort_transactions_by_created_at;
 pub use history::ArkTransaction;
 pub use script::extract_sequence_from_csv_sig_script;

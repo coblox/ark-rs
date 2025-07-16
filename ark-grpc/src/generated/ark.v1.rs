@@ -14,15 +14,6 @@ pub struct Input {
     pub taproot_tree: ::core::option::Option<Tapscripts>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Output {
-    /// onchain or off-chain
-    #[prost(string, tag = "1")]
-    pub address: ::prost::alloc::string::String,
-    /// Amount to send in satoshis.
-    #[prost(uint64, tag = "2")]
-    pub amount: u64,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Vtxo {
     #[prost(message, optional, tag = "1")]
     pub outpoint: ::core::option::Option<Outpoint>,
@@ -121,7 +112,7 @@ pub struct BatchFinalizedEvent {
     pub commitment_txid: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct BatchFailed {
+pub struct BatchFailedEvent {
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
@@ -223,7 +214,7 @@ pub struct RegisterIntentResponse {
 pub struct DeleteIntentRequest {
     /// A BIP322 signature that includes any of the inputs of the intent to be deleted to prove the
     /// ownership of that intent.
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag = "1")]
     pub proof: ::core::option::Option<Bip322Signature>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -292,7 +283,7 @@ pub mod get_event_stream_response {
         #[prost(message, tag = "3")]
         BatchFinalized(super::BatchFinalizedEvent),
         #[prost(message, tag = "4")]
-        BatchFailed(super::BatchFailed),
+        BatchFailed(super::BatchFailedEvent),
         #[prost(message, tag = "5")]
         TreeSigningStarted(super::TreeSigningStartedEvent),
         #[prost(message, tag = "6")]
@@ -1116,20 +1107,6 @@ pub struct GetConnectorsResponse {
     pub page: ::core::option::Option<IndexerPageResponse>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct GetCommitmentTxLeavesRequest {
-    #[prost(string, tag = "1")]
-    pub txid: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
-    pub page: ::core::option::Option<IndexerPageRequest>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct GetCommitmentTxLeavesResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub leaves: ::prost::alloc::vec::Vec<IndexerOutpoint>,
-    #[prost(message, optional, tag = "2")]
-    pub page: ::core::option::Option<IndexerPageResponse>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetVtxoTreeRequest {
     #[prost(message, optional, tag = "1")]
     pub batch_outpoint: ::core::option::Option<IndexerOutpoint>,
@@ -1182,24 +1159,6 @@ pub struct GetVtxosRequest {
 pub struct GetVtxosResponse {
     #[prost(message, repeated, tag = "1")]
     pub vtxos: ::prost::alloc::vec::Vec<IndexerVtxo>,
-    #[prost(message, optional, tag = "2")]
-    pub page: ::core::option::Option<IndexerPageResponse>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct GetTransactionHistoryRequest {
-    #[prost(string, tag = "1")]
-    pub address: ::prost::alloc::string::String,
-    #[prost(int64, tag = "2")]
-    pub start_time: i64,
-    #[prost(int64, tag = "3")]
-    pub end_time: i64,
-    #[prost(message, optional, tag = "4")]
-    pub page: ::core::option::Option<IndexerPageRequest>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct GetTransactionHistoryResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub history: ::prost::alloc::vec::Vec<IndexerTxHistoryRecord>,
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<IndexerPageResponse>,
 }
@@ -1607,28 +1566,6 @@ pub mod indexer_service_client {
                 .insert(GrpcMethod::new("ark.v1.IndexerService", "GetConnectors"));
             self.inner.unary(req, path, codec).await
         }
-        /// GetCommitmentTxLeaves returns the list of leaves (vtxo outpoints) of all batch outputs'
-        /// trees included in the provided commitment transaction.
-        /// The response may include pagination information if the results span multiple pages.
-        pub async fn get_commitment_tx_leaves(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetCommitmentTxLeavesRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetCommitmentTxLeavesResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.IndexerService/GetCommitmentTxLeaves",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "ark.v1.IndexerService",
-                "GetCommitmentTxLeaves",
-            ));
-            self.inner.unary(req, path, codec).await
-        }
         /// GetVtxoTree returns the vtxo tree for the provided batch outpoint.
         /// The response includes a list of txs with details on the tree posistion and may
         /// include pagination information if the results span multiple pages.
@@ -1683,28 +1620,6 @@ pub mod indexer_service_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("ark.v1.IndexerService", "GetVtxos"));
-            self.inner.unary(req, path, codec).await
-        }
-        /// GetTransactionHistory returns the list of transactions for the provided address.
-        /// The tx history can be filtered by defining a start and/or end time.
-        /// The response may be paginated if the results span multiple pages.
-        pub async fn get_transaction_history(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetTransactionHistoryRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetTransactionHistoryResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/ark.v1.IndexerService/GetTransactionHistory",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "ark.v1.IndexerService",
-                "GetTransactionHistory",
-            ));
             self.inner.unary(req, path, codec).await
         }
         /// GetVtxoChain returns the the chain of ark txs that starts from spending any vtxo leaf

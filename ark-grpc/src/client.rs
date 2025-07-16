@@ -6,9 +6,7 @@ use crate::generated::ark::v1::Bip322Signature;
 use crate::generated::ark::v1::ConfirmRegistrationRequest;
 use crate::generated::ark::v1::GetEventStreamRequest;
 use crate::generated::ark::v1::GetInfoRequest;
-use crate::generated::ark::v1::GetTransactionHistoryRequest;
 use crate::generated::ark::v1::GetTransactionsStreamRequest;
-use crate::generated::ark::v1::GetVtxosRequest;
 use crate::generated::ark::v1::IndexerChainedTxType;
 use crate::generated::ark::v1::Outpoint;
 use crate::generated::ark::v1::RegisterIntentRequest;
@@ -25,6 +23,9 @@ use ark_core::server::BatchTreeEventType;
 use ark_core::server::ChainedTxType;
 use ark_core::server::CommitmentTransaction;
 use ark_core::server::FinalizeOffchainTxResponse;
+use ark_core::server::GetVtxosRequest;
+use ark_core::server::GetVtxosRequestFilter;
+use ark_core::server::GetVtxosRequestReference;
 use ark_core::server::Info;
 use ark_core::server::ListVtxo;
 use ark_core::server::NoncePks;
@@ -40,7 +41,6 @@ use ark_core::server::TreeTxEvent;
 use ark_core::server::VtxoChain;
 use ark_core::server::VtxoChains;
 use ark_core::server::VtxoOutPoint;
-use ark_core::ArkAddress;
 use ark_core::ArkTransaction;
 use ark_core::TxGraphChunk;
 use async_stream::stream;
@@ -88,7 +88,7 @@ impl Client {
     }
 
     pub async fn get_info(&mut self) -> Result<Info, Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let response = client
             .get_info(GetInfoRequest {})
@@ -98,23 +98,11 @@ impl Client {
         response.into_inner().try_into()
     }
 
-    pub async fn list_vtxos(&self, address: &ArkAddress) -> Result<ListVtxo, Error> {
-        let script = address.to_p2tr_script_pubkey();
-        let script = script.to_hex_string();
+    pub async fn list_vtxos(&self, request: GetVtxosRequest) -> Result<ListVtxo, Error> {
+        let mut client = self.indexer_client()?;
 
-        let mut client = self.inner_indexer_client()?;
-
-        // TODO: Implement pagination.
-        // TODO: We probably want to expose all fields as arguments to this function.
         let response = client
-            .get_vtxos(GetVtxosRequest {
-                scripts: vec![script],
-                outpoints: vec![],
-                recoverable_only: false,
-                spendable_only: false,
-                spent_only: false,
-                page: None,
-            })
+            .get_vtxos(generated::ark::v1::GetVtxosRequest::from(request))
             .await
             .map_err(Error::request)?;
 
@@ -163,37 +151,12 @@ impl Client {
         Ok(ListVtxo::new(spent, spendable))
     }
 
-    pub async fn get_tx_history(&self, address: &ArkAddress) -> Result<Vec<ArkTransaction>, Error> {
-        let address = address.encode();
-
-        let mut client = self.inner_indexer_client()?;
-
-        // TODO: Implement pagination.
-        let response = client
-            .get_transaction_history(GetTransactionHistoryRequest {
-                address,
-                start_time: -1,
-                end_time: -1,
-                page: None,
-            })
-            .await
-            .map_err(Error::request)?;
-
-        let history = response.into_inner().history;
-        let history = history
-            .iter()
-            .map(ArkTransaction::try_from)
-            .collect::<Result<Vec<_>, Error>>()?;
-
-        Ok(history)
-    }
-
     pub async fn register_intent(
         &self,
         intent_message: &proof_of_funds::IntentMessage,
         proof: &proof_of_funds::Bip322Proof,
     ) -> Result<String, Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let request = RegisterIntentRequest {
             intent: Some(Bip322Signature {
@@ -217,7 +180,7 @@ impl Client {
         virtual_tx: Psbt,
         checkpoint_txs: Vec<Psbt>,
     ) -> Result<SubmitOffchainTxResponse, Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
@@ -269,7 +232,7 @@ impl Client {
         txid: Txid,
         checkpoint_txs: Vec<Psbt>,
     ) -> Result<FinalizeOffchainTxResponse, Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
@@ -293,7 +256,7 @@ impl Client {
     }
 
     pub async fn confirm_registration(&self, intent_id: String) -> Result<(), Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         client
             .confirm_registration(ConfirmRegistrationRequest { intent_id })
@@ -309,7 +272,7 @@ impl Client {
         cosigner_pubkey: PublicKey,
         pub_nonce_tree: NoncePks,
     ) -> Result<(), Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let tree_nonces = serde_json::to_string(&pub_nonce_tree).map_err(Error::conversion)?;
 
@@ -331,7 +294,7 @@ impl Client {
         cosigner_pk: PublicKey,
         partial_sig_tree: PartialSigTree,
     ) -> Result<(), Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let tree_signatures =
             serde_json::to_string(&partial_sig_tree).map_err(Error::conversion)?;
@@ -353,7 +316,7 @@ impl Client {
         signed_forfeit_txs: Vec<Psbt>,
         signed_commitment_tx: Option<Psbt>,
     ) -> Result<(), Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let base64 = base64::engine::GeneralPurpose::new(
             &base64::alphabet::STANDARD,
@@ -382,7 +345,7 @@ impl Client {
         &self,
         topics: Vec<String>,
     ) -> Result<impl Stream<Item = Result<RoundStreamEvent, Error>> + Unpin, Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let response = client
             .get_event_stream(GetEventStreamRequest { topics })
@@ -417,7 +380,7 @@ impl Client {
     pub async fn get_tx_stream(
         &self,
     ) -> Result<impl Stream<Item = Result<TransactionEvent, Error>> + Unpin, Error> {
-        let mut client = self.inner_ark_client()?;
+        let mut client = self.ark_client()?;
 
         let response = client
             .get_transactions_stream(GetTransactionsStreamRequest {})
@@ -455,7 +418,7 @@ impl Client {
         outpoint: Option<OutPoint>,
         size_and_index: Option<(i32, i32)>,
     ) -> Result<VtxoChainResponse, Error> {
-        let mut client = self.inner_indexer_client()?;
+        let mut client = self.indexer_client()?;
         let response = client
             .get_vtxo_chain(generated::ark::v1::GetVtxoChainRequest {
                 outpoint: outpoint.map(|o| generated::ark::v1::IndexerOutpoint {
@@ -477,7 +440,7 @@ impl Client {
         txids: Vec<String>,
         size_and_index: Option<(i32, i32)>,
     ) -> Result<VirtualTxsResponse, Error> {
-        let mut client = self.inner_indexer_client()?;
+        let mut client = self.indexer_client()?;
         let response = client
             .get_virtual_txs(generated::ark::v1::GetVirtualTxsRequest {
                 txids,
@@ -491,13 +454,11 @@ impl Client {
         Ok(result)
     }
 
-    fn inner_ark_client(&self) -> Result<ArkServiceClient<tonic::transport::Channel>, Error> {
+    fn ark_client(&self) -> Result<ArkServiceClient<tonic::transport::Channel>, Error> {
         // Cloning an `ArkServiceClient<Channel>` is cheap.
         self.ark_client.clone().ok_or(Error::not_connected())
     }
-    fn inner_indexer_client(
-        &self,
-    ) -> Result<IndexerServiceClient<tonic::transport::Channel>, Error> {
+    fn indexer_client(&self) -> Result<IndexerServiceClient<tonic::transport::Channel>, Error> {
         self.indexer_client.clone().ok_or(Error::not_connected())
     }
 }
@@ -548,8 +509,8 @@ impl TryFrom<generated::ark::v1::BatchFinalizedEvent> for BatchFinalizedEvent {
     }
 }
 
-impl From<generated::ark::v1::BatchFailed> for BatchFailed {
-    fn from(value: generated::ark::v1::BatchFailed) -> Self {
+impl From<generated::ark::v1::BatchFailedEvent> for BatchFailed {
+    fn from(value: generated::ark::v1::BatchFailedEvent) -> Self {
         BatchFailed {
             id: value.id,
             reason: value.reason,
@@ -914,5 +875,35 @@ impl TryFrom<&generated::ark::v1::IndexerTxHistoryRecord> for ArkTransaction {
         };
 
         Ok(tx)
+    }
+}
+
+impl From<GetVtxosRequest> for generated::ark::v1::GetVtxosRequest {
+    fn from(value: GetVtxosRequest) -> Self {
+        let (spendable_only, spent_only, recoverable_only) = match value.filter() {
+            Some(GetVtxosRequestFilter::Spendable) => (true, false, false),
+            Some(GetVtxosRequestFilter::Spent) => (false, true, false),
+            Some(GetVtxosRequestFilter::Recoverable) => (false, false, true),
+            None => (false, false, false),
+        };
+
+        match value.reference() {
+            GetVtxosRequestReference::Scripts(script_bufs) => Self {
+                scripts: script_bufs.iter().map(|s| s.to_hex_string()).collect(),
+                outpoints: Vec::new(),
+                spendable_only,
+                spent_only,
+                recoverable_only,
+                page: None,
+            },
+            GetVtxosRequestReference::OutPoints(outpoints) => Self {
+                scripts: Vec::new(),
+                outpoints: outpoints.iter().map(|o| o.to_string()).collect(),
+                spendable_only,
+                spent_only,
+                recoverable_only,
+                page: None,
+            },
+        }
     }
 }

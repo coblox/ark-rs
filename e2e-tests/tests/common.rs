@@ -380,10 +380,10 @@ pub async fn wait_until_balance(
     client: &Client<Nigiri, Wallet<InMemoryDb>>,
     confirmed_target: Amount,
     pending_target: Amount,
-) {
+) -> Result<(), String> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let offchain_balance = client.offchain_balance().await.unwrap();
+            let offchain_balance = client.offchain_balance().await.map_err(|e| e.to_string())?;
 
             tracing::debug!(
                 ?offchain_balance,
@@ -395,14 +395,16 @@ pub async fn wait_until_balance(
             if offchain_balance.confirmed() == confirmed_target
                 && offchain_balance.pending() == pending_target
             {
-                return;
+                return Ok::<(), String>(());
             }
 
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     })
     .await
-    .unwrap();
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 pub fn init_tracing() {

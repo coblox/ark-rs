@@ -103,8 +103,11 @@ pub async fn e2e() {
         Amount::ZERO,
         alice_fund_amount - send_to_bob_vtxo_amount,
     )
-    .await;
-    wait_until_balance(&bob, Amount::ZERO, send_to_bob_vtxo_amount).await;
+    .await
+    .unwrap();
+    wait_until_balance(&bob, Amount::ZERO, send_to_bob_vtxo_amount)
+        .await
+        .unwrap();
 
     bob.board(&mut rng, false).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;

@@ -17,6 +17,7 @@ use ark_core::round::sign_round_psbt;
 use ark_core::round::sign_vtxo_tree;
 use ark_core::server;
 use ark_core::server::BatchTreeEventType;
+use ark_core::server::GetVtxosRequest;
 use ark_core::server::RoundStreamEvent;
 use ark_core::server::VtxoOutPoint;
 use ark_core::vtxo::list_virtual_tx_outpoints;
@@ -633,7 +634,8 @@ async fn fund_vtxo(
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let vtxo_list = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
+    let request = GetVtxosRequest::new_for_addresses(&[vtxo.to_ark_address()]);
+    let vtxo_list = grpc_client.list_vtxos(request).await?;
     let virtual_tx_outpoint = vtxo_list
         .spendable()
         .iter()
@@ -1438,9 +1440,10 @@ async fn spendable_vtxos(
     let mut spendable_vtxos = HashMap::new();
     for vtxo in vtxos.iter() {
         // The VTXOs for the given Ark address that the Ark server tells us about.
-        let vtxo_outpoints = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
+        let request = GetVtxosRequest::new_for_addresses(&[vtxo.to_ark_address()]);
+        let vtxo_list = grpc_client.list_vtxos(request).await?;
 
-        spendable_vtxos.insert(vtxo.clone(), vtxo_outpoints.spendable().to_vec());
+        spendable_vtxos.insert(vtxo.clone(), vtxo_list.spendable().to_vec());
     }
 
     Ok(spendable_vtxos)

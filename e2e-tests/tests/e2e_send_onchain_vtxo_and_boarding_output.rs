@@ -14,9 +14,6 @@ use std::sync::Arc;
 
 mod common;
 
-// This test is expected to fail until we use an arkd server with patch
-// ebee8c6d4d579a4285d4d4f3fc40ddb3e745d8af.
-
 #[tokio::test]
 #[ignore]
 pub async fn send_onchain_vtxo_and_boarding_output() {
@@ -57,7 +54,9 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     assert_eq!(offchain_balance.total(), Amount::ZERO);
 
     alice.board(&mut rng, false).await.unwrap();
-    wait_until_balance(&alice, fund_amount, Amount::ZERO).await;
+    wait_until_balance(&alice, fund_amount, Amount::ZERO)
+        .await
+        .unwrap();
 
     // Ensure that the round TX is mined.
     nigiri.mine(1).await;
@@ -70,7 +69,9 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
         .await
         .unwrap();
 
-    wait_until_balance(&alice, Amount::ZERO, fund_amount).await;
+    wait_until_balance(&alice, Amount::ZERO, fund_amount)
+        .await
+        .unwrap();
 
     let unilateral_exit_trees = alice.build_unilateral_exit_trees().await.unwrap();
 
@@ -94,7 +95,9 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
     // Get one confirmation on the VTXO.
     nigiri.mine(1).await;
 
-    wait_until_balance(&alice, Amount::ZERO, Amount::ZERO).await;
+    wait_until_balance(&alice, Amount::ZERO, Amount::ZERO)
+        .await
+        .unwrap();
 
     let alice_boarding_address = alice.get_boarding_address().unwrap();
     nigiri

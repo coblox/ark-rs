@@ -1,6 +1,7 @@
 //! Messages exchanged between the client and the Ark server.
 
 use crate::tx_graph::TxGraphChunk;
+use crate::ArkAddress;
 use crate::Error;
 use ::serde::Deserialize;
 use ::serde::Serialize;
@@ -112,6 +113,85 @@ pub struct Round {
     pub stage: i32,
 }
 
+// TODO: Implement pagination.
+pub struct GetVtxosRequest {
+    reference: GetVtxosRequestReference,
+    filter: Option<GetVtxosRequestFilter>,
+}
+
+impl GetVtxosRequest {
+    pub fn new_for_addresses(addresses: &[ArkAddress]) -> Self {
+        let scripts = addresses
+            .iter()
+            .map(|a| a.to_p2tr_script_pubkey())
+            .collect();
+
+        Self {
+            reference: GetVtxosRequestReference::Scripts(scripts),
+            filter: None,
+        }
+    }
+
+    pub fn new_for_outpoints(outpoints: &[OutPoint]) -> Self {
+        Self {
+            reference: GetVtxosRequestReference::OutPoints(outpoints.to_vec()),
+            filter: None,
+        }
+    }
+
+    pub fn spendable_only(self) -> Result<Self, Error> {
+        if self.filter.is_some() {
+            return Err(Error::ad_hoc("GetVtxosRequest filter already set"));
+        }
+
+        Ok(Self {
+            filter: Some(GetVtxosRequestFilter::Spendable),
+            ..self
+        })
+    }
+
+    pub fn spent_only(self) -> Result<Self, Error> {
+        if self.filter.is_some() {
+            return Err(Error::ad_hoc("GetVtxosRequest filter already set"));
+        }
+
+        Ok(Self {
+            filter: Some(GetVtxosRequestFilter::Spent),
+            ..self
+        })
+    }
+
+    pub fn recoverable_only(self) -> Result<Self, Error> {
+        if self.filter.is_some() {
+            return Err(Error::ad_hoc("GetVtxosRequest filter already set"));
+        }
+
+        Ok(Self {
+            filter: Some(GetVtxosRequestFilter::Recoverable),
+            ..self
+        })
+    }
+
+    pub fn reference(&self) -> &GetVtxosRequestReference {
+        &self.reference
+    }
+
+    pub fn filter(&self) -> Option<&GetVtxosRequestFilter> {
+        self.filter.as_ref()
+    }
+}
+
+pub enum GetVtxosRequestReference {
+    Scripts(Vec<ScriptBuf>),
+    OutPoints(Vec<OutPoint>),
+}
+
+pub enum GetVtxosRequestFilter {
+    Spendable,
+    Spent,
+    Recoverable,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VtxoOutPoint {
     pub outpoint: OutPoint,
@@ -125,8 +205,17 @@ pub struct VtxoOutPoint {
     pub is_swept: bool,
     pub is_unrolled: bool,
     pub is_spent: bool,
+    /// If the VTXO is spent, this field references the _checkpoint transaction_ that actually
+    /// spends it. The corresponding virtual transaction is in the `ark_txid` field.
+    ///
+    /// If the VTXO is renewed, this field references the corresponding _forfeit transaction_.
     pub spent_by: Option<Txid>,
+    /// The list of commitment transactions that are ancestors to this VTXO.
     pub commitment_txids: Vec<Txid>,
+    /// The commitment TXID onto which this VTXO was forfeited.
+    pub settled_by: Option<Txid>,
+    /// The virtual transaction that _spends_ this VTXO (if we omit the checkpoint transaction).
+    pub ark_txid: Option<Txid>,
 }
 
 impl VtxoOutPoint {
@@ -161,6 +250,10 @@ pub struct ListVtxo {
 impl ListVtxo {
     pub fn new(spent: Vec<VtxoOutPoint>, spendable: Vec<VtxoOutPoint>) -> Self {
         Self { spent, spendable }
+    }
+
+    pub fn all(&self) -> Vec<VtxoOutPoint> {
+        [self.spent(), self.spendable()].concat()
     }
 
     pub fn spent(&self) -> &[VtxoOutPoint] {

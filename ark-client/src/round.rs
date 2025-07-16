@@ -43,7 +43,11 @@ where
 {
     /// Lift all pending VTXOs and boarding outputs into the Ark, converting them into new,
     /// confirmed VTXOs. We do this by "joining the next round".
-    pub async fn board<R>(&self, rng: &mut R, select_recoverable_vtxos: bool) -> Result<(), Error>
+    pub async fn board<R>(
+        &self,
+        rng: &mut R,
+        select_recoverable_vtxos: bool,
+    ) -> Result<Option<Txid>, Error>
     where
         R: Rng + CryptoRng + Clone,
     {
@@ -62,8 +66,8 @@ where
         );
 
         if boarding_inputs.is_empty() && vtxo_inputs.is_empty() {
-            tracing::debug!("No transactions to board");
-            return Ok(());
+            tracing::debug!("No inputs to board with");
+            return Ok(None);
         }
 
         let join_next_ark_round = || async {
@@ -92,7 +96,7 @@ where
 
         tracing::info!(%txid, "Boarding success");
 
-        Ok(())
+        Ok(Some(txid))
     }
 
     // In go client: CollaborativeRedeem.
