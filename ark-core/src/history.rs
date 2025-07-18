@@ -1,4 +1,4 @@
-use crate::server::VtxoOutPoint;
+use crate::server::VirtualTxOutPoint;
 use crate::Error;
 use bitcoin::Amount;
 use bitcoin::SignedAmount;
@@ -7,7 +7,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ArkTransaction {
+pub enum Transaction {
     /// A transaction that transforms a UTXO into a boarding output.
     Boarding {
         txid: Txid,
@@ -24,20 +24,21 @@ pub enum ArkTransaction {
         amount: SignedAmount,
         created_at: i64,
     },
-    /// A transaction that sends VTXOs.
-    Virtual {
+    /// A transaction that has VTXOs as outputs.
+    Ark {
         txid: Txid,
-        /// We use [`SignedAmount`] because virtual transactions may be incoming or outgoing i.e.
+        /// We use [`SignedAmount`] because Ark transactions may be incoming or outgoing i.e.
         /// we can send or receive VTXOs.
         amount: SignedAmount,
-        /// A virtual transaction is settled if our outputs in it have been spent.
+        /// An Ark transaction is settled if our outputs in it have been spent. Thus, if we have no
+        /// _outputs_ in it, it is considered settled too.
         is_settled: bool,
         created_at: i64,
     },
 }
 
-impl ArkTransaction {
-    /// The creation time of the [`ArkTransaction`]. This value can be used for sorting.
+impl Transaction {
+    /// The creation time of the [`Transaction`]. This value can be used for sorting.
     ///
     /// - The creation time of a boarding transaction is based on its confirmation time. If it is
     ///   pending, we return [`None`].
@@ -45,30 +46,31 @@ impl ArkTransaction {
     /// - The creation time of a commitment transaction is based on the `created_at` of our VTXO
     ///   produced by it.
     ///
-    /// - The creation time of a virtual transaction is based on the `created_at` of our VTXO
-    ///   produced by it.
+    /// - The creation time of an Ark transaction is based on the `created_at` of our VTXO produced
+    ///   by it.
     pub fn created_at(&self) -> Option<i64> {
         match self {
-            ArkTransaction::Boarding { confirmed_at, .. } => *confirmed_at,
-            ArkTransaction::Commitment { created_at, .. }
-            | ArkTransaction::Virtual { created_at, .. } => Some(*created_at),
+            Transaction::Boarding { confirmed_at, .. } => *confirmed_at,
+            Transaction::Commitment { created_at, .. } | Transaction::Ark { created_at, .. } => {
+                Some(*created_at)
+            }
         }
     }
 
     pub fn txid(&self) -> Txid {
         match self {
-            ArkTransaction::Boarding { txid, .. }
-            | ArkTransaction::Commitment { txid, .. }
-            | ArkTransaction::Virtual { txid, .. } => *txid,
+            Transaction::Boarding { txid, .. }
+            | Transaction::Commitment { txid, .. }
+            | Transaction::Ark { txid, .. } => *txid,
         }
     }
 }
 
-/// Sorts a slice of [`ArkTransaction`] in descending order by creation time.
+/// Sorts a slice of [`Transaction`] in descending order by creation time.
 ///
 /// Transactions with no creation time (None) are placed first, followed by transactions
 /// sorted by creation time in descending order (newest first).
-pub fn sort_transactions_by_created_at(txs: &mut [ArkTransaction]) {
+pub fn sort_transactions_by_created_at(txs: &mut [Transaction]) {
     txs.sort_by(|a, b| match (a.created_at(), b.created_at()) {
         (None, None) => std::cmp::Ordering::Equal,
         (None, Some(_)) => std::cmp::Ordering::Less,
@@ -81,11 +83,11 @@ pub fn sort_transactions_by_created_at(txs: &mut [ArkTransaction]) {
 ///
 /// Relevant transactions exclude settlements or transactions were receive a change VTXO.
 pub fn generate_incoming_vtxo_transaction_history(
-    spent_vtxos: &[VtxoOutPoint],
-    spendable_vtxos: &[VtxoOutPoint],
+    spent_vtxos: &[VirtualTxOutPoint],
+    spendable_vtxos: &[VirtualTxOutPoint],
     // Commitment transactions which take a boarding output of ours as an input.
     boarding_commitment_txs: &[Txid],
-) -> Result<Vec<ArkTransaction>, Error> {
+) -> Result<Vec<Transaction>, Error> {
     let mut txs = Vec::new();
 
     let all_vtxos = spent_vtxos.iter().chain(spendable_vtxos.iter());
@@ -105,11 +107,11 @@ pub fn generate_incoming_vtxo_transaction_history(
         }
 
         // An incoming VTXO that deserves an entry in the transaction history is the result of an
-        // incoming payment. We may receive a VTXO as part of a commitment transaction or through a
-        // virtual transaction.
+        // incoming payment. We may receive a VTXO as part of a commitment transaction or through an
+        // Ark transaction.
 
         if vtxo.is_preconfirmed {
-            // We compute how much we spent in that virtual transaction.
+            // We compute how much we spent in that Ark transaction.
             let spent_amount = {
                 let mut spent_amount = Amount::ZERO;
                 let mut remaining_spent_vtxos = Vec::new();
@@ -135,7 +137,7 @@ pub fn generate_incoming_vtxo_transaction_history(
             //
             // If net amount is negative, it's a change VTXO => IGNORED.
             if net_amount.is_positive() {
-                txs.push(ArkTransaction::Virtual {
+                txs.push(Transaction::Ark {
                     txid: vtxo.outpoint.txid,
                     amount: net_amount,
                     is_settled: vtxo.spent_by.is_some() ||
@@ -174,7 +176,7 @@ pub fn generate_incoming_vtxo_transaction_history(
             //
             // If net amount received is negative, it's a change VTXO => IGNORED.
             if net_amount.is_positive() {
-                txs.push(ArkTransaction::Commitment {
+                txs.push(Transaction::Commitment {
                     txid: vtxo.outpoint.txid,
                     amount: receive_amount,
                     created_at: vtxo.created_at,
@@ -190,19 +192,19 @@ pub fn generate_incoming_vtxo_transaction_history(
 ///
 /// By relevant transactions we mean everything except for settlements.
 pub fn generate_outgoing_vtxo_transaction_history<F>(
-    spent_vtxos: &[VtxoOutPoint],
-    spendable_vtxos: &[VtxoOutPoint],
+    spent_vtxos: &[VirtualTxOutPoint],
+    spendable_vtxos: &[VirtualTxOutPoint],
     fetch_vtxo_by_outpoint: F,
-) -> Result<Vec<ArkTransaction>, Error>
+) -> Result<Vec<Transaction>, Error>
 where
-    F: Fn(bitcoin::OutPoint) -> Result<Option<VtxoOutPoint>, Error>,
+    F: Fn(bitcoin::OutPoint) -> Result<Option<VirtualTxOutPoint>, Error>,
 {
     let mut txs = Vec::new();
 
     let all_vtxos = [spent_vtxos, spendable_vtxos].concat();
 
     // We collect all the transactions where one or more VTXOs of ours are spent.
-    let mut vtxos_by_spent_by = HashMap::<Txid, Vec<VtxoOutPoint>>::new();
+    let mut vtxos_by_spent_by = HashMap::<Txid, Vec<VirtualTxOutPoint>>::new();
     for spent_vtxo in spent_vtxos.iter() {
         if spent_vtxo.settled_by.is_some() {
             // Ignore settlements.
@@ -224,7 +226,7 @@ where
     }
 
     // An outgoing VTXO that warrants an entry in the transaction history is the input to an
-    // outgoing payment. We may send a VTXO as part of a commitment transaction or through a virtual
+    // outgoing payment. We may send a VTXO as part of a commitment transaction or through an Ark
     // transaction.
 
     for (spend_txid, spent_vtxos) in vtxos_by_spent_by.iter() {
@@ -293,7 +295,7 @@ where
 
         match is_preconfirmed {
             true => {
-                txs.push(ArkTransaction::Virtual {
+                txs.push(Transaction::Ark {
                     txid: outpoint_txid,
                     amount: net_amount,
                     // I believe this always set to settled, because there is not settling to be
@@ -302,7 +304,7 @@ where
                     created_at,
                 })
             }
-            false => txs.push(ArkTransaction::Commitment {
+            false => txs.push(Transaction::Commitment {
                 txid: commitment_txids[0],
                 amount: net_amount,
                 created_at,
@@ -330,7 +332,7 @@ mod tests {
                 .unwrap(),
         ];
 
-        let spendable_vtxos = [VtxoOutPoint {
+        let spendable_vtxos = [VirtualTxOutPoint {
             outpoint: OutPoint {
                 txid: "2646aea682389e1739a33a617d1f3ee28ccc7e4e16210936cece7a823e37527e"
                     .parse()
@@ -378,7 +380,7 @@ mod tests {
                 .unwrap(),
         ];
 
-        let spendable_vtxos = [VtxoOutPoint {
+        let spendable_vtxos = [VirtualTxOutPoint {
             outpoint: OutPoint {
                 txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                     .parse()
@@ -403,7 +405,7 @@ mod tests {
             ark_txid: None,
         }];
 
-        let spent_vtxos = [VtxoOutPoint {
+        let spent_vtxos = [VirtualTxOutPoint {
             outpoint: OutPoint {
                 txid: "2646aea682389e1739a33a617d1f3ee28ccc7e4e16210936cece7a823e37527e"
                     .parse()
@@ -453,7 +455,7 @@ mod tests {
 
         assert_eq!(
             out_txs,
-            [ArkTransaction::Virtual {
+            [Transaction::Ark {
                 txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                     .parse()
                     .unwrap(),
@@ -467,7 +469,7 @@ mod tests {
     #[test]
     fn bob_before_settling() {
         let spendable_vtxos = [
-            VtxoOutPoint {
+            VirtualTxOutPoint {
                 outpoint: OutPoint {
                     txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                         .parse()
@@ -491,7 +493,7 @@ mod tests {
                 settled_by: None,
                 ark_txid: None,
             },
-            VtxoOutPoint {
+            VirtualTxOutPoint {
                 outpoint: OutPoint {
                     txid: "884d85c0db6b52139c39337d54c1f20cd8c5c0d2e83109d69246a345ccc9d169"
                         .parse()
@@ -534,7 +536,7 @@ mod tests {
         assert_eq!(
             inc_txs,
             [
-                ArkTransaction::Virtual {
+                Transaction::Ark {
                     txid: "884d85c0db6b52139c39337d54c1f20cd8c5c0d2e83109d69246a345ccc9d169"
                         .parse()
                         .unwrap(),
@@ -542,7 +544,7 @@ mod tests {
                     is_settled: false,
                     created_at: 1730330748,
                 },
-                ArkTransaction::Virtual {
+                Transaction::Ark {
                     txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                         .parse()
                         .unwrap(),
@@ -558,7 +560,7 @@ mod tests {
 
     #[test]
     fn bob_after_settling() {
-        let spendable_vtxos = [VtxoOutPoint {
+        let spendable_vtxos = [VirtualTxOutPoint {
             outpoint: OutPoint {
                 txid: "d9c95372c0c419fd007005edd54e21dabac0375a37fc5f17c313bc1e5f483af9"
                     .parse()
@@ -584,7 +586,7 @@ mod tests {
         }];
 
         let spent_vtxos = [
-            VtxoOutPoint {
+            VirtualTxOutPoint {
                 outpoint: OutPoint {
                     txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                         .parse()
@@ -616,7 +618,7 @@ mod tests {
                 ),
                 ark_txid: None,
             },
-            VtxoOutPoint {
+            VirtualTxOutPoint {
                 outpoint: OutPoint {
                     txid: "884d85c0db6b52139c39337d54c1f20cd8c5c0d2e83109d69246a345ccc9d169"
                         .parse()
@@ -665,7 +667,7 @@ mod tests {
         assert_eq!(
             inc_txs,
             [
-                ArkTransaction::Virtual {
+                Transaction::Ark {
                     txid: "884d85c0db6b52139c39337d54c1f20cd8c5c0d2e83109d69246a345ccc9d169"
                         .parse()
                         .unwrap(),
@@ -673,7 +675,7 @@ mod tests {
                     is_settled: true,
                     created_at: 1730330748,
                 },
-                ArkTransaction::Virtual {
+                Transaction::Ark {
                     txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                         .parse()
                         .unwrap(),
@@ -689,7 +691,7 @@ mod tests {
 
     #[test]
     fn bob_after_sending() {
-        let spendable_vtxos = [VtxoOutPoint {
+        let spendable_vtxos = [VirtualTxOutPoint {
             outpoint: OutPoint {
                 txid: "c59004f8c468a922216f513ec7d63d9b6a13571af0bacd51910709351d27fe55"
                     .parse()
@@ -715,7 +717,7 @@ mod tests {
         }];
 
         let spent_vtxos = [
-            VtxoOutPoint {
+            VirtualTxOutPoint {
                 outpoint: OutPoint {
                     txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                         .parse()
@@ -747,7 +749,7 @@ mod tests {
                 ),
                 ark_txid: None,
             },
-            VtxoOutPoint {
+            VirtualTxOutPoint {
                 outpoint: OutPoint {
                     txid: "884d85c0db6b52139c39337d54c1f20cd8c5c0d2e83109d69246a345ccc9d169"
                         .parse()
@@ -779,7 +781,7 @@ mod tests {
                 ),
                 ark_txid: None,
             },
-            VtxoOutPoint {
+            VirtualTxOutPoint {
                 outpoint: OutPoint {
                     txid: "d9c95372c0c419fd007005edd54e21dabac0375a37fc5f17c313bc1e5f483af9"
                         .parse()
@@ -829,7 +831,7 @@ mod tests {
         assert_eq!(
             txs,
             [
-                ArkTransaction::Virtual {
+                Transaction::Ark {
                     txid: "c59004f8c468a922216f513ec7d63d9b6a13571af0bacd51910709351d27fe55"
                         .parse()
                         .unwrap(),
@@ -837,7 +839,7 @@ mod tests {
                     is_settled: true,
                     created_at: 1730331198,
                 },
-                ArkTransaction::Virtual {
+                Transaction::Ark {
                     txid: "884d85c0db6b52139c39337d54c1f20cd8c5c0d2e83109d69246a345ccc9d169"
                         .parse()
                         .unwrap(),
@@ -845,7 +847,7 @@ mod tests {
                     is_settled: true,
                     created_at: 1730330748,
                 },
-                ArkTransaction::Virtual {
+                Transaction::Ark {
                     txid: "33fd8ca9ea9cfb53802c42be10ae428573e19fb89484dfe536d06d43efa82034"
                         .parse()
                         .unwrap(),

@@ -251,7 +251,7 @@ pub fn create_unilateral_exit_transaction(
 pub fn build_unilateral_exit_tree_txids(
     vtxo_chains: &server::VtxoChains,
     // The TXID of the VTXO we want to commit on-chain.
-    virtual_txid: Txid,
+    ark_txid: Txid,
 ) -> Result<Vec<Vec<Txid>>, Error> {
     // Create a hash-map for quick lookups: TXID -> `VtxoChain`.
     let mut chain_map: HashMap<Txid, &server::VtxoChain> = HashMap::new();
@@ -306,10 +306,10 @@ pub fn build_unilateral_exit_tree_txids(
 
                     reached_commitment = true;
                 }
-                server::ChainedTxType::Virtual
+                server::ChainedTxType::Ark
                 | server::ChainedTxType::Checkpoint
                 | server::ChainedTxType::Tree => {
-                    // Continue traversing virtual/checkpoint/tree transactions up the tree.
+                    // Continue traversing virtual transactions up the tree.
                     find_paths_to_commitment(
                         parent_txid,
                         chain_map,
@@ -353,7 +353,7 @@ pub fn build_unilateral_exit_tree_txids(
     let mut visited = HashSet::new();
 
     find_paths_to_commitment(
-        virtual_txid,
+        ark_txid,
         &chain_map,
         &mut current_path,
         &mut all_paths,
@@ -362,7 +362,7 @@ pub fn build_unilateral_exit_tree_txids(
 
     if all_paths.is_empty() {
         return Err(Error::ad_hoc(format!(
-            "no paths found from virtual TX {virtual_txid} to commitment transaction",
+            "no paths found from Ark TX {ark_txid} to commitment transaction",
         )));
     }
 
@@ -382,7 +382,7 @@ pub fn build_unilateral_exit_tree_txids(
 /// on-chain to execute a unilateral exit with this VTXO.
 ///
 /// We use the word "tree" because a VTXO may come from more than one path i.e. if its corresponding
-/// virtual transaction has more than one input!
+/// Ark transaction has more than one input!
 pub struct UnilateralExitTree {
     /// The commitment transactions from which this VTXO comes from.
     ///
@@ -396,10 +396,10 @@ pub struct UnilateralExitTree {
 }
 
 impl UnilateralExitTree {
-    pub fn new(commitment_txids: Vec<Txid>, virtual_tx_branches: Vec<Vec<Psbt>>) -> Self {
+    pub fn new(commitment_txids: Vec<Txid>, virtual_tx_tree: Vec<Vec<Psbt>>) -> Self {
         Self {
             commitment_txids,
-            inner: virtual_tx_branches,
+            inner: virtual_tx_tree,
         }
     }
 

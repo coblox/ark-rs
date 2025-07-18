@@ -3,31 +3,27 @@ use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
 use bitcoin::TxOut;
 
+pub mod batch;
 pub mod boarding_output;
 pub mod coin_select;
 pub mod conversions;
+pub mod history;
 pub mod proof_of_funds;
-pub mod redeem;
-pub mod round;
+pub mod send;
 pub mod server;
 pub mod unilateral_exit;
 pub mod vtxo;
 
 mod ark_address;
 mod error;
-mod history;
-mod internal_node;
 mod script;
+mod tree_tx_output_script;
 mod tx_graph;
 
 pub use ark_address::ArkAddress;
 pub use boarding_output::BoardingOutput;
 pub use error::Error;
 pub use error::ErrorContext;
-pub use history::generate_incoming_vtxo_transaction_history;
-pub use history::generate_outgoing_vtxo_transaction_history;
-pub use history::sort_transactions_by_created_at;
-pub use history::ArkTransaction;
 pub use script::extract_sequence_from_csv_sig_script;
 pub use tx_graph::TxGraph;
 pub use tx_graph::TxGraphChunk;

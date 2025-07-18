@@ -26,9 +26,10 @@ ark-core = "0.1" # Replace with actual version
 ### Examples
 
 - [`e2e_two_party`](./e2e-tests/tests/e2e_two_party.rs)
-- [`e2e_concurrent_boarding`](./e2e-tests/tests/e2e_concurrent_boarding.rs)
+- [`e2e_concurrent_settlement`](./e2e-tests/tests/e2e_concurrent_settlement.rs)
 - [`e2e_send_onchain_boarding_output`](./e2e-tests/tests/e2e_send_onchain_boarding_output.rs)
-- [`e2e_send_onchain_vtxo`](./e2e-tests/tests/e2e_send_onchain_vtxo.rs)
+- [`e2e_send_onchain_vtxo_and_boarding_output`](./e2e-tests/tests/e2e_send_onchain_vtxo_and_boarding_output.rs)
+- [`e2e_sub_dust.rs`](./e2e-tests/tests/e2e_sub_dust.rs)
 - [`sample client`](./ark-sample/src/main.rs)
 
 ### Client Initialization
@@ -234,7 +235,7 @@ Build and run arkd (note, you will need to have golang installed on your machine
 
 ```bash
 # Note: the default round interval of ark server might be a bit too fast, we provide a simple patch function to change the round interval to 30 seconds
-# just arkd-patch-makefile     
+# just arkd-patch-makefile
 # afterwards you can run
 just arkd-setup
 ```

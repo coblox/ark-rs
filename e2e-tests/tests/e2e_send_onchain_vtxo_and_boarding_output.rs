@@ -53,12 +53,12 @@ pub async fn send_onchain_vtxo_and_boarding_output() {
 
     assert_eq!(offchain_balance.total(), Amount::ZERO);
 
-    alice.board(&mut rng, false).await.unwrap();
+    alice.settle(&mut rng, false).await.unwrap();
     wait_until_balance(&alice, fund_amount, Amount::ZERO)
         .await
         .unwrap();
 
-    // Ensure that the round TX is mined.
+    // Ensure that the commitment TX is mined.
     nigiri.mine(1).await;
     alice_wallet.sync().await.unwrap();
 

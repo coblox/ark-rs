@@ -2,7 +2,7 @@ use crate::ark_address::ArkAddress;
 use crate::script::csv_sig_script;
 use crate::script::multisig_script;
 use crate::script::tr_script_pubkey;
-use crate::server::VtxoOutPoint;
+use crate::server::VirtualTxOutPoint;
 use crate::Error;
 use crate::ExplorerUtxo;
 use crate::UNSPENDABLE_KEY;
@@ -256,14 +256,14 @@ fn calculate_leaf_depths(n: usize) -> Vec<usize> {
 
 /// The status of a collection of VTXOs.
 #[derive(Debug, Clone, Default)]
-pub struct VirtualTxOutpoints {
+pub struct VirtualTxOutPoints {
     /// VTXOs that can be spent in collaboration with the Ark server.
-    pub spendable: Vec<(VtxoOutPoint, Vtxo)>,
+    pub spendable: Vec<(VirtualTxOutPoint, Vtxo)>,
     /// VTXOs that should only be spent unilaterally.
-    pub expired: Vec<(VtxoOutPoint, Vtxo)>,
+    pub expired: Vec<(VirtualTxOutPoint, Vtxo)>,
 }
 
-impl VirtualTxOutpoints {
+impl VirtualTxOutPoints {
     pub fn spendable_balance(&self) -> Amount {
         self.spendable
             .iter()
@@ -279,8 +279,8 @@ impl VirtualTxOutpoints {
 
 pub fn list_virtual_tx_outpoints<F>(
     find_outpoints_fn: F,
-    spendable_vtxos: HashMap<Vtxo, Vec<VtxoOutPoint>>,
-) -> Result<VirtualTxOutpoints, Error>
+    spendable_vtxos: HashMap<Vtxo, Vec<VirtualTxOutPoint>>,
+) -> Result<VirtualTxOutPoints, Error>
 where
     F: Fn(&Address) -> Result<Vec<ExplorerUtxo>, Error>,
 {
@@ -318,5 +318,5 @@ where
         }
     }
 
-    Ok(VirtualTxOutpoints { spendable, expired })
+    Ok(VirtualTxOutPoints { spendable, expired })
 }

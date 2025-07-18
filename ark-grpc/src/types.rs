@@ -112,7 +112,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
     }
 }
 
-impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VtxoOutPoint {
+impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VirtualTxOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::IndexerVtxo) -> Result<Self, Self::Error> {
@@ -163,7 +163,7 @@ impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VtxoOutPoint {
     }
 }
 
-impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
+impl TryFrom<&generated::ark::v1::Vtxo> for server::VirtualTxOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::Vtxo) -> Result<Self, Self::Error> {

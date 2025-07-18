@@ -14,7 +14,9 @@ use crate::generated::ark::v1::SubmitSignedForfeitTxsRequest;
 use crate::generated::ark::v1::SubmitTreeNoncesRequest;
 use crate::generated::ark::v1::SubmitTreeSignaturesRequest;
 use crate::Error;
+use ark_core::history;
 use ark_core::proof_of_funds;
+use ark_core::server::ArkTransaction;
 use ark_core::server::BatchFailed;
 use ark_core::server::BatchFinalizationEvent;
 use ark_core::server::BatchFinalizedEvent;
@@ -30,18 +32,16 @@ use ark_core::server::Info;
 use ark_core::server::ListVtxo;
 use ark_core::server::NoncePks;
 use ark_core::server::PartialSigTree;
-use ark_core::server::RedeemTransaction;
-use ark_core::server::RoundStreamEvent;
+use ark_core::server::StreamEvent;
+use ark_core::server::StreamTransaction;
 use ark_core::server::SubmitOffchainTxResponse;
-use ark_core::server::TransactionEvent;
 use ark_core::server::TreeNoncesAggregatedEvent;
 use ark_core::server::TreeSignatureEvent;
 use ark_core::server::TreeSigningStartedEvent;
 use ark_core::server::TreeTxEvent;
+use ark_core::server::VirtualTxOutPoint;
 use ark_core::server::VtxoChain;
 use ark_core::server::VtxoChains;
-use ark_core::server::VtxoOutPoint;
-use ark_core::ArkTransaction;
 use ark_core::TxGraphChunk;
 use async_stream::stream;
 use base64::Engine;
@@ -112,7 +112,7 @@ impl Client {
             .iter()
             .filter_map(|vtxo| {
                 if vtxo.is_unrolled || vtxo.is_spent || vtxo.is_swept {
-                    Some(VtxoOutPoint::try_from(vtxo))
+                    Some(VirtualTxOutPoint::try_from(vtxo))
                 } else {
                     None
                 }
@@ -125,7 +125,7 @@ impl Client {
             .iter()
             .filter_map(|vtxo| {
                 if !vtxo.is_unrolled && !vtxo.is_spent && !vtxo.is_swept {
-                    Some(VtxoOutPoint::try_from(vtxo))
+                    Some(VirtualTxOutPoint::try_from(vtxo))
                 } else {
                     None
                 }
@@ -177,7 +177,7 @@ impl Client {
 
     pub async fn submit_offchain_transaction_request(
         &self,
-        virtual_tx: Psbt,
+        ark_tx: Psbt,
         checkpoint_txs: Vec<Psbt>,
     ) -> Result<SubmitOffchainTxResponse, Error> {
         let mut client = self.ark_client()?;
@@ -187,7 +187,7 @@ impl Client {
             base64::engine::GeneralPurposeConfig::new(),
         );
 
-        let virtual_tx = base64.encode(virtual_tx.serialize());
+        let ark_tx = base64.encode(ark_tx.serialize());
 
         let checkpoint_txs = checkpoint_txs
             .into_iter()
@@ -196,7 +196,7 @@ impl Client {
 
         let res = client
             .submit_tx(generated::ark::v1::SubmitTxRequest {
-                signed_ark_tx: virtual_tx,
+                signed_ark_tx: ark_tx,
                 checkpoint_txs,
             })
             .await
@@ -204,11 +204,9 @@ impl Client {
 
         let res = res.into_inner();
 
-        let signed_virtual_tx = res.final_ark_tx;
-        let signed_virtual_tx = base64
-            .decode(signed_virtual_tx)
-            .map_err(Error::conversion)?;
-        let signed_virtual_tx = Psbt::deserialize(&signed_virtual_tx).map_err(Error::conversion)?;
+        let signed_ark_tx = res.final_ark_tx;
+        let signed_ark_tx = base64.decode(signed_ark_tx).map_err(Error::conversion)?;
+        let signed_ark_tx = Psbt::deserialize(&signed_ark_tx).map_err(Error::conversion)?;
 
         let signed_checkpoint_txs = res
             .signed_checkpoint_txs
@@ -222,7 +220,7 @@ impl Client {
             .collect::<Result<Vec<_>, Error>>()?;
 
         Ok(SubmitOffchainTxResponse {
-            signed_virtual_tx,
+            signed_ark_tx,
             signed_checkpoint_txs,
         })
     }
@@ -344,7 +342,7 @@ impl Client {
     pub async fn get_event_stream(
         &self,
         topics: Vec<String>,
-    ) -> Result<impl Stream<Item = Result<RoundStreamEvent, Error>> + Unpin, Error> {
+    ) -> Result<impl Stream<Item = Result<StreamEvent, Error>> + Unpin, Error> {
         let mut client = self.ark_client()?;
 
         let response = client
@@ -361,7 +359,7 @@ impl Client {
                             log::debug!("Got empty message");
                         }
                         Some(event) => {
-                            yield Ok(RoundStreamEvent::try_from(event)?);
+                            yield Ok(StreamEvent::try_from(event)?);
                         }
                     },
                     Ok(None) => {
@@ -379,7 +377,7 @@ impl Client {
 
     pub async fn get_tx_stream(
         &self,
-    ) -> Result<impl Stream<Item = Result<TransactionEvent, Error>> + Unpin, Error> {
+    ) -> Result<impl Stream<Item = Result<StreamTransaction, Error>> + Unpin, Error> {
         let mut client = self.ark_client()?;
 
         let response = client
@@ -397,7 +395,7 @@ impl Client {
                             log::debug!("Got empty message");
                         }
                         Some(event) => {
-                            yield Ok(TransactionEvent::try_from(event)?);
+                            yield Ok(StreamTransaction::try_from(event)?);
                         }
                     },
                     Ok(None) => {
@@ -529,7 +527,7 @@ impl TryFrom<generated::ark::v1::TreeSigningStartedEvent> for TreeSigningStarted
         .decode(&value.unsigned_commitment_tx)
         .map_err(Error::conversion)?;
 
-        let unsigned_round_tx =
+        let unsigned_commitment_tx =
             Psbt::deserialize(&unsigned_commitment_tx).map_err(Error::conversion)?;
 
         Ok(TreeSigningStartedEvent {
@@ -539,7 +537,7 @@ impl TryFrom<generated::ark::v1::TreeSigningStartedEvent> for TreeSigningStarted
                 .into_iter()
                 .map(|pk| pk.parse().map_err(Error::conversion))
                 .collect::<Result<Vec<_>, Error>>()?,
-            unsigned_round_tx,
+            unsigned_commitment_tx,
         })
     }
 }
@@ -621,7 +619,7 @@ impl TryFrom<generated::ark::v1::TreeSignatureEvent> for TreeSignatureEvent {
     }
 }
 
-impl TryFrom<generated::ark::v1::get_event_stream_response::Event> for RoundStreamEvent {
+impl TryFrom<generated::ark::v1::get_event_stream_response::Event> for StreamEvent {
     type Error = Error;
 
     fn try_from(
@@ -629,34 +627,34 @@ impl TryFrom<generated::ark::v1::get_event_stream_response::Event> for RoundStre
     ) -> Result<Self, Self::Error> {
         Ok(match value {
             generated::ark::v1::get_event_stream_response::Event::BatchStarted(e) => {
-                RoundStreamEvent::BatchStarted(e.try_into()?)
+                StreamEvent::BatchStarted(e.try_into()?)
             }
             generated::ark::v1::get_event_stream_response::Event::BatchFinalization(e) => {
-                RoundStreamEvent::BatchFinalization(e.try_into()?)
+                StreamEvent::BatchFinalization(e.try_into()?)
             }
             generated::ark::v1::get_event_stream_response::Event::BatchFinalized(e) => {
-                RoundStreamEvent::BatchFinalized(e.try_into()?)
+                StreamEvent::BatchFinalized(e.try_into()?)
             }
             generated::ark::v1::get_event_stream_response::Event::BatchFailed(e) => {
-                RoundStreamEvent::BatchFailed(e.into())
+                StreamEvent::BatchFailed(e.into())
             }
             generated::ark::v1::get_event_stream_response::Event::TreeSigningStarted(e) => {
-                RoundStreamEvent::TreeSigningStarted(e.try_into()?)
+                StreamEvent::TreeSigningStarted(e.try_into()?)
             }
             generated::ark::v1::get_event_stream_response::Event::TreeNoncesAggregated(e) => {
-                RoundStreamEvent::TreeNoncesAggregated(e.try_into()?)
+                StreamEvent::TreeNoncesAggregated(e.try_into()?)
             }
             generated::ark::v1::get_event_stream_response::Event::TreeTx(e) => {
-                RoundStreamEvent::TreeTx(e.try_into()?)
+                StreamEvent::TreeTx(e.try_into()?)
             }
             generated::ark::v1::get_event_stream_response::Event::TreeSignature(e) => {
-                RoundStreamEvent::TreeSignature(e.try_into()?)
+                StreamEvent::TreeSignature(e.try_into()?)
             }
         })
     }
 }
 
-impl TryFrom<generated::ark::v1::get_transactions_stream_response::Tx> for TransactionEvent {
+impl TryFrom<generated::ark::v1::get_transactions_stream_response::Tx> for StreamTransaction {
     type Error = Error;
 
     fn try_from(
@@ -665,12 +663,12 @@ impl TryFrom<generated::ark::v1::get_transactions_stream_response::Tx> for Trans
         match value {
             generated::ark::v1::get_transactions_stream_response::Tx::CommitmentTx(
                 commitment_tx,
-            ) => Ok(TransactionEvent::Round(CommitmentTransaction::try_from(
-                commitment_tx,
-            )?)),
-            generated::ark::v1::get_transactions_stream_response::Tx::ArkTx(redeem) => Ok(
-                TransactionEvent::Redeem(RedeemTransaction::try_from(redeem)?),
-            ),
+            ) => Ok(StreamTransaction::Commitment(
+                CommitmentTransaction::try_from(commitment_tx)?,
+            )),
+            generated::ark::v1::get_transactions_stream_response::Tx::ArkTx(redeem) => {
+                Ok(StreamTransaction::Ark(ArkTransaction::try_from(redeem)?))
+            }
         }
     }
 }
@@ -682,13 +680,13 @@ impl TryFrom<generated::ark::v1::TxNotification> for CommitmentTransaction {
         let spent_vtxos = value
             .spent_vtxos
             .iter()
-            .map(VtxoOutPoint::try_from)
+            .map(VirtualTxOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         let spendable_vtxos = value
             .spendable_vtxos
             .iter()
-            .map(VtxoOutPoint::try_from)
+            .map(VirtualTxOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(CommitmentTransaction {
@@ -699,23 +697,23 @@ impl TryFrom<generated::ark::v1::TxNotification> for CommitmentTransaction {
     }
 }
 
-impl TryFrom<generated::ark::v1::TxNotification> for RedeemTransaction {
+impl TryFrom<generated::ark::v1::TxNotification> for ArkTransaction {
     type Error = Error;
 
     fn try_from(value: generated::ark::v1::TxNotification) -> Result<Self, Self::Error> {
         let spent_vtxos = value
             .spent_vtxos
             .iter()
-            .map(VtxoOutPoint::try_from)
+            .map(VirtualTxOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         let spendable_vtxos = value
             .spendable_vtxos
             .iter()
-            .map(VtxoOutPoint::try_from)
+            .map(VirtualTxOutPoint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(RedeemTransaction {
+        Ok(ArkTransaction {
             txid: Txid::from_str(value.txid.as_str()).map_err(Error::conversion)?,
             spent_vtxos,
             spendable_vtxos,
@@ -822,7 +820,7 @@ impl TryFrom<&generated::ark::v1::IndexerChain> for VtxoChain {
         let tx_type = match value.r#type() {
             IndexerChainedTxType::Unspecified => ChainedTxType::Unspecified,
             IndexerChainedTxType::Commitment => ChainedTxType::Commitment,
-            IndexerChainedTxType::Ark => ChainedTxType::Virtual,
+            IndexerChainedTxType::Ark => ChainedTxType::Ark,
             IndexerChainedTxType::Tree => ChainedTxType::Tree,
             IndexerChainedTxType::Checkpoint => ChainedTxType::Checkpoint,
         };
@@ -846,7 +844,7 @@ impl From<generated::ark::v1::IndexerPageResponse> for IndexerPage {
     }
 }
 
-impl TryFrom<&generated::ark::v1::IndexerTxHistoryRecord> for ArkTransaction {
+impl TryFrom<&generated::ark::v1::IndexerTxHistoryRecord> for history::Transaction {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::IndexerTxHistoryRecord) -> Result<Self, Self::Error> {
@@ -860,12 +858,12 @@ impl TryFrom<&generated::ark::v1::IndexerTxHistoryRecord> for ArkTransaction {
         let amount = SignedAmount::from_sat(value.amount as i64 * sign);
 
         let tx = match &value.key {
-            Some(Key::CommitmentTxid(txid)) => ArkTransaction::Commitment {
+            Some(Key::CommitmentTxid(txid)) => history::Transaction::Commitment {
                 txid: txid.parse().map_err(Error::conversion)?,
                 amount,
                 created_at: value.created_at,
             },
-            Some(Key::VirtualTxid(txid)) => ArkTransaction::Virtual {
+            Some(Key::VirtualTxid(txid)) => history::Transaction::Ark {
                 txid: txid.parse().map_err(Error::conversion)?,
                 amount,
                 is_settled: value.is_settled,

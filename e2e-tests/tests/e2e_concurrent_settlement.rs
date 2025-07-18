@@ -63,24 +63,24 @@ pub async fn concurrent_boarding() {
     let alice_task = tokio::spawn({
         async move {
             let mut rng = StdRng::from_entropy();
-            alice.board(&mut rng, false).await.unwrap();
+            alice.settle(&mut rng, false).await.unwrap();
             alice
         }
     });
 
     let bob_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        bob.board(&mut rng, false).await.unwrap();
+        bob.settle(&mut rng, false).await.unwrap();
         bob
     });
 
     let claire_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        claire.board(&mut rng, false).await.unwrap();
+        claire.settle(&mut rng, false).await.unwrap();
         claire
     });
 
-    // Three parties joining a round concurrently.
+    // Three parties joining a batch concurrently.
     let (alice, bob, claire) = try_join!(alice_task, bob_task, claire_task).unwrap();
 
     wait_until_balance(&alice, alice_fund_amount, Amount::ZERO)
@@ -136,24 +136,24 @@ pub async fn concurrent_boarding() {
     let alice_task = tokio::spawn({
         async move {
             let mut rng = StdRng::from_entropy();
-            alice.board(&mut rng, false).await.unwrap();
+            alice.settle(&mut rng, false).await.unwrap();
             alice
         }
     });
 
     let bob_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        bob.board(&mut rng, false).await.unwrap();
+        bob.settle(&mut rng, false).await.unwrap();
         bob
     });
 
     let claire_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        claire.board(&mut rng, false).await.unwrap();
+        claire.settle(&mut rng, false).await.unwrap();
         claire
     });
 
-    // Three parties joining a round concurrently.
+    // Three parties joining a batch concurrently.
     let (alice, bob, claire) = try_join!(alice_task, bob_task, claire_task).unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 

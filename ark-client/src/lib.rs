@@ -2,14 +2,14 @@ use crate::error::ErrorContext;
 use crate::wallet::BoardingWallet;
 use crate::wallet::OnchainWallet;
 use ark_core::build_anchor_tx;
-use ark_core::generate_incoming_vtxo_transaction_history;
-use ark_core::generate_outgoing_vtxo_transaction_history;
+use ark_core::history;
+use ark_core::history::generate_incoming_vtxo_transaction_history;
+use ark_core::history::generate_outgoing_vtxo_transaction_history;
+use ark_core::history::sort_transactions_by_created_at;
 use ark_core::server;
 use ark_core::server::GetVtxosRequest;
-use ark_core::server::VtxoOutPoint;
-use ark_core::sort_transactions_by_created_at;
+use ark_core::server::VirtualTxOutPoint;
 use ark_core::ArkAddress;
-use ark_core::ArkTransaction;
 use ark_core::UtxoCoinSelection;
 use ark_core::Vtxo;
 use ark_grpc::VtxoChainResponse;
@@ -26,8 +26,8 @@ use jiff::Timestamp;
 use std::sync::Arc;
 use tokio::task::block_in_place;
 
+pub mod batch;
 pub mod error;
-pub mod round;
 pub mod wallet;
 
 mod coin_select;
@@ -220,18 +220,18 @@ pub struct SpendStatus {
 
 #[derive(Clone, Debug, Default)]
 pub struct ListVtxo {
-    pub spendable: Vec<(Vec<VtxoOutPoint>, Vtxo)>,
-    pub spent: Vec<(Vec<VtxoOutPoint>, Vtxo)>,
+    pub spendable: Vec<(Vec<VirtualTxOutPoint>, Vtxo)>,
+    pub spent: Vec<(Vec<VirtualTxOutPoint>, Vtxo)>,
 }
 impl ListVtxo {
-    fn spendable_outpoints(&self) -> Vec<VtxoOutPoint> {
+    fn spendable_outpoints(&self) -> Vec<VirtualTxOutPoint> {
         self.spendable
             .iter()
             .flat_map(|(os, _)| os.clone())
             .collect()
     }
 
-    fn spent_outpoints(&self) -> Vec<VtxoOutPoint> {
+    fn spent_outpoints(&self) -> Vec<VirtualTxOutPoint> {
         self.spent.iter().flat_map(|(os, _)| os.clone()).collect()
     }
 }
@@ -432,7 +432,7 @@ where
     pub async fn spendable_vtxos(
         &self,
         include_recoverable_vtxos: bool,
-    ) -> Result<Vec<(Vec<VtxoOutPoint>, Vtxo)>, Error> {
+    ) -> Result<Vec<(Vec<VirtualTxOutPoint>, Vtxo)>, Error> {
         let now = Timestamp::now();
 
         let mut spendable = vec![];
@@ -443,10 +443,10 @@ where
             let explorer_utxos = self.blockchain().find_outpoints(vtxo.address()).await?;
 
             let mut spendable_outpoints = Vec::new();
-            for vtxo_outpoint in virtual_tx_outpoints {
+            for virtual_tx_outpoint in virtual_tx_outpoints {
                 match explorer_utxos
                     .iter()
-                    .find(|explorer_utxo| explorer_utxo.outpoint == vtxo_outpoint.outpoint)
+                    .find(|explorer_utxo| explorer_utxo.outpoint == virtual_tx_outpoint.outpoint)
                 {
                     // Include VTXOs that have been confirmed on the blockchain, but whose
                     // exit path is still _inactive_.
@@ -458,12 +458,12 @@ where
                         std::time::Duration::from_secs(*confirmation_blocktime),
                     ) =>
                     {
-                        spendable_outpoints.push(vtxo_outpoint);
+                        spendable_outpoints.push(virtual_tx_outpoint);
                     }
                     // The VTXO has not been confirmed on the blockchain yet. Therefore, it
                     // cannot have expired.
                     _ => {
-                        spendable_outpoints.push(vtxo_outpoint);
+                        spendable_outpoints.push(virtual_tx_outpoint);
                     }
                 }
             }
@@ -500,9 +500,9 @@ where
         Ok(sum)
     }
 
-    pub async fn transaction_history(&self) -> Result<Vec<ArkTransaction>, Error> {
+    pub async fn transaction_history(&self) -> Result<Vec<history::Transaction>, Error> {
         let mut boarding_transactions = Vec::new();
-        let mut boarding_round_transactions = Vec::new();
+        let mut boarding_commitment_transactions = Vec::new();
 
         let boarding_addresses = self.get_boarding_addresses()?;
         for boarding_address in boarding_addresses.iter() {
@@ -517,7 +517,7 @@ where
             {
                 let confirmed_at = confirmation_blocktime.map(|t| t as i64);
 
-                boarding_transactions.push(ArkTransaction::Boarding {
+                boarding_transactions.push(history::Transaction::Boarding {
                     txid: outpoint.txid,
                     amount: *amount,
                     confirmed_at,
@@ -529,7 +529,7 @@ where
                     .await?;
 
                 if let Some(spend_txid) = status.spend_txid {
-                    boarding_round_transactions.push(spend_txid);
+                    boarding_commitment_transactions.push(spend_txid);
                 }
             }
         }
@@ -539,7 +539,7 @@ where
         let incoming_transactions = generate_incoming_vtxo_transaction_history(
             &vtxos.spent_outpoints(),
             &vtxos.spendable_outpoints(),
-            &boarding_round_transactions,
+            &boarding_commitment_transactions,
         )?;
 
         let runtime = tokio::runtime::Handle::current();
