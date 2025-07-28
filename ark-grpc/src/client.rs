@@ -141,8 +141,10 @@ impl Client {
             }
         }
 
-        // Remove "spendable" VTXOs that were actually already spent by a redeem transaction
-        // from the list of spendable VTXOs.
+        // FIXME: Maybe this is no longer necessary.
+
+        // Remove "spendable" VTXOs that were actually already spent by an Ark transaction from the
+        // list of spendable VTXOs.
         spendable.retain(|i| !spent_by_redeem.contains(i));
 
         // Add them to the list of spent VTXOs.
