@@ -349,7 +349,7 @@ where
         };
 
         let (bip322_proof, intent_message) = proof_of_funds::make_bip322_signature(
-            self.kp(),
+            &[*self.kp()],
             sign_for_onchain_pk_fn,
             inputs,
             outputs.clone(),
@@ -637,11 +637,15 @@ where
                             tracing::debug!(batch_id = e.id, "Batch finalization started");
 
                             create_and_sign_forfeit_txs(
-                                self.kp(),
                                 vtxo_inputs.as_slice(),
                                 &connectors_graph.leaves(),
                                 &server_info.forfeit_address,
                                 server_info.dust,
+                                |msg, _vtxo| {
+                                    let sig = self.secp().sign_schnorr_no_aux_rand(msg, self.kp());
+                                    let pk = self.kp().x_only_public_key().0;
+                                    (sig, pk)
+                                },
                             )
                             .map_err(Error::from)?
                         } else {

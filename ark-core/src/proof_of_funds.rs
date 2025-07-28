@@ -93,8 +93,7 @@ impl Bip322Proof {
 }
 
 pub fn make_bip322_signature<F>(
-    // TODO: In theory, should be a `Vec`.
-    signing_kp: &Keypair,
+    signing_kps: &[Keypair],
     sign_for_onchain_pk_fn: F,
     inputs: Vec<Input>,
     outputs: Vec<Output>,
@@ -208,6 +207,14 @@ where
                 sig
             }
             false => {
+                let signing_kp = signing_kps
+                    .iter()
+                    .find(|kp| {
+                        let (xonly_ok, _) = kp.x_only_public_key();
+                        xonly_ok == pk
+                    })
+                    .ok_or_else(|| Error::ad_hoc("Could not find suitable kp for pk"))?;
+
                 let sig = secp.sign_schnorr_no_aux_rand(&msg, signing_kp);
 
                 secp.verify_schnorr(&sig, &msg, &pk)

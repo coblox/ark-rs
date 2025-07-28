@@ -61,12 +61,16 @@ impl VtxoInput {
     pub fn outpoint(&self) -> OutPoint {
         self.outpoint
     }
+
+    pub fn vtxo(&self) -> &Vtxo {
+        &self.vtxo
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct OffchainTransactions {
     pub ark_tx: Psbt,
-    pub checkpoint_txs: Vec<(Psbt, CheckpointOutput, CheckpointOutPoint)>,
+    pub checkpoint_txs: Vec<(Psbt, CheckpointOutput, CheckpointOutPoint, Vtxo)>,
 }
 
 /// Build a transaction to send VTXOs to another [`ArkAddress`].
@@ -84,14 +88,20 @@ pub fn build_offchain_transactions(
 
     let mut checkpoint_txs = Vec::new();
     for vtxo_input in vtxo_inputs.iter() {
-        let checkpoint_tx = build_checkpoint_psbt(vtxo_input).with_context(|| {
-            format!(
-                "failed to build checkpoint psbt for input {:?}",
-                vtxo_input.outpoint
-            )
-        })?;
+        let (psbt, checkpoint_output, checkpoint_out_point) = build_checkpoint_psbt(vtxo_input)
+            .with_context(|| {
+                format!(
+                    "failed to build checkpoint psbt for input {:?}",
+                    vtxo_input.outpoint
+                )
+            })?;
 
-        checkpoint_txs.push(checkpoint_tx);
+        checkpoint_txs.push((
+            psbt,
+            checkpoint_output,
+            checkpoint_out_point,
+            vtxo_input.vtxo.clone(),
+        ));
     }
 
     let mut outputs = outputs
@@ -146,7 +156,7 @@ pub fn build_offchain_transactions(
         lock_time,
         input: checkpoint_txs
             .iter()
-            .map(|(_, _, CheckpointOutPoint { outpoint, .. })| TxIn {
+            .map(|(_, _, CheckpointOutPoint { outpoint, .. }, _)| TxIn {
                 previous_output: *outpoint,
                 script_sig: Default::default(),
                 // TODO: Use a different sequence number if we have a CLTV multisig script.
@@ -160,7 +170,7 @@ pub fn build_offchain_transactions(
     let mut unsigned_ark_psbt =
         Psbt::from_unsigned_tx(unsigned_ark_tx).map_err(Error::transaction)?;
 
-    for (i, (_, checkpoint_output, _)) in checkpoint_txs.iter().enumerate() {
+    for (i, (_, checkpoint_output, _, _)) in checkpoint_txs.iter().enumerate() {
         let mut bytes = Vec::new();
 
         let script = &checkpoint_output.forfeit_script;
