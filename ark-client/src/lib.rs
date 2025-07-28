@@ -26,10 +26,10 @@ use jiff::Timestamp;
 use std::sync::Arc;
 use tokio::task::block_in_place;
 
-pub mod batch;
 pub mod error;
 pub mod wallet;
 
+mod batch;
 mod coin_select;
 mod send_vtxo;
 mod unilateral_exit;
