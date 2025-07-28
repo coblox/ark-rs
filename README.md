@@ -231,7 +231,7 @@ We build and run ark server from source, we have a few convenience methods:
 just arkd-checkout <tag>
 ```
 
-Build and run arkd (note, you will need to have golang installed on your machine). Please refer to [ark's readme](https://github.com/ark-network/ark/) for system requirements.
+Build and run arkd (note, you will need to have golang installed on your machine). Please refer to [arkd's readme](https://github.com/arkade-os/arkd/) for system requirements.
 
 ```bash
 # Note: the default round interval of ark server might be a bit too fast, we provide a simple patch function to change the round interval to 30 seconds
