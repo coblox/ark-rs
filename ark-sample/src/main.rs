@@ -289,7 +289,7 @@ async fn main() -> Result<()> {
                     &mut ark_tx,
                     &checkpoint_txs
                         .iter()
-                        .map(|(_, output, outpoint)| (output.clone(), *outpoint))
+                        .map(|(_, output, outpoint, _)| (output.clone(), *outpoint))
                         .collect::<Vec<_>>(),
                     i,
                 )?;
@@ -302,7 +302,7 @@ async fn main() -> Result<()> {
                     ark_tx,
                     checkpoint_txs
                         .into_iter()
-                        .map(|(psbt, _, _)| psbt)
+                        .map(|(psbt, _, _, _)| psbt)
                         .collect(),
                 )
                 .await
@@ -471,7 +471,7 @@ async fn settle(
 
     let signing_kp = Keypair::from_secret_key(&secp, &sk);
     let (bip322_proof, intent_message) = proof_of_funds::make_bip322_signature(
-        &signing_kp,
+        &[signing_kp],
         sign_for_onchain_pk_fn,
         batch_inputs,
         batch_outputs,
@@ -641,11 +641,15 @@ async fn settle(
         let connectors_graph = TxGraph::new(connectors_graph_chunks)?;
 
         create_and_sign_forfeit_txs(
-            &signing_kp,
             vtxo_inputs.as_slice(),
             &connectors_graph.leaves(),
             &server_info.forfeit_address,
             server_info.dust,
+            |msg, _vtxo| {
+                let sig = secp.sign_schnorr_no_aux_rand(msg, &signing_kp);
+                let pk = signing_kp.x_only_public_key().0;
+                (sig, pk)
+            },
         )?
     } else {
         Vec::new()

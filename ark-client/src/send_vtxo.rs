@@ -111,7 +111,7 @@ where
                 &mut ark_tx,
                 &checkpoint_txs
                     .iter()
-                    .map(|(_, output, outpoint)| (output.clone(), *outpoint))
+                    .map(|(_, output, outpoint, _)| (output.clone(), *outpoint))
                     .collect::<Vec<_>>(),
                 i,
             )?;
@@ -125,7 +125,7 @@ where
                 ark_tx,
                 checkpoint_txs
                     .into_iter()
-                    .map(|(psbt, _, _)| psbt)
+                    .map(|(psbt, _, _, _)| psbt)
                     .collect(),
             )
             .await

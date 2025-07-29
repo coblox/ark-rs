@@ -340,16 +340,17 @@ pub fn sign_batch_tree(
 
 /// Build and sign a forfeit transaction per [`VtxoInput`] to be used in an upcoming commitment
 /// transaction.
-pub fn create_and_sign_forfeit_txs(
-    // For now we only support a single keypair. Eventually we may need to provide something like a
-    // `Sign` trait, so that the caller can find the secret key for the given `VtxoInput`.
-    kp: &Keypair,
+pub fn create_and_sign_forfeit_txs<F>(
     vtxo_inputs: &[VtxoInput],
     connectors_leaves: &[&Psbt],
     server_forfeit_address: &Address,
     // As defined by the server.
     dust: Amount,
-) -> Result<Vec<Psbt>, Error> {
+    sign: F,
+) -> Result<Vec<Psbt>, Error>
+where
+    F: Fn(&secp256k1::Message, &Vtxo) -> (schnorr::Signature, XOnlyPublicKey),
+{
     const FORFEIT_TX_CONNECTOR_INDEX: usize = 0;
     const FORFEIT_TX_VTXO_INDEX: usize = 1;
 
@@ -458,8 +459,7 @@ pub fn create_and_sign_forfeit_txs(
 
         let msg = secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
 
-        let sig = secp.sign_schnorr_no_aux_rand(&msg, kp);
-        let pk = kp.x_only_public_key().0;
+        let (sig, pk) = sign(&msg, vtxo);
 
         secp.verify_schnorr(&sig, &msg, &pk)
             .map_err(Error::crypto)
