@@ -129,7 +129,7 @@ arkd-patch-makefile:
     #!/usr/bin/env bash
     set -euxo pipefail
 
-    cd ark-go/ark/server
+    cd $ARKD_DIR/server
     # This version will match ARK_ROUND_INTERVAL=ANY_NUMBER
     # On macOS, sed requires an empty string after -i for in-place editing
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -145,11 +145,22 @@ arkd-redis-run:
     #!/usr/bin/env bash
     set -euxo pipefail
 
-    if netstat -tlnp | grep :6379 > /dev/null 2>&1; then
-        echo "Redis is already running on port 6379"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        if lsof -i :6379 > /dev/null 2>&1; then
+            echo "Redis is already running on port 6379"
+        else
+            make redis-up -C $ARKD_DIR &
+            echo "arkd redis started"
+        fi
     else
-        make redis-up -C $ARKD_DIR &
-        echo "arkd redis started"
+        # Linux
+        if netstat -tlnp | grep :6379 > /dev/null 2>&1; then
+            echo "Redis is already running on port 6379"
+        else
+            make redis-up -C $ARKD_DIR &
+            echo "arkd redis started"
+        fi
     fi
 
 # Start `arkd-wallet` binary.
