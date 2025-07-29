@@ -129,7 +129,7 @@ arkd-patch-makefile:
     #!/usr/bin/env bash
     set -euxo pipefail
 
-    cd ark-go/ark/server
+    cd $ARKD_DIR/server
     # This version will match ARK_ROUND_INTERVAL=ANY_NUMBER
     # On macOS, sed requires an empty string after -i for in-place editing
     if [[ "$OSTYPE" == "darwin"* ]]; then
