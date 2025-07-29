@@ -63,29 +63,35 @@ pub async fn concurrent_boarding() {
     let alice_task = tokio::spawn({
         async move {
             let mut rng = StdRng::from_entropy();
-            alice.board(&mut rng, false).await.unwrap();
+            alice.settle(&mut rng, false).await.unwrap();
             alice
         }
     });
 
     let bob_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        bob.board(&mut rng, false).await.unwrap();
+        bob.settle(&mut rng, false).await.unwrap();
         bob
     });
 
     let claire_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        claire.board(&mut rng, false).await.unwrap();
+        claire.settle(&mut rng, false).await.unwrap();
         claire
     });
 
-    // Three parties joining a round concurrently.
+    // Three parties joining a batch concurrently.
     let (alice, bob, claire) = try_join!(alice_task, bob_task, claire_task).unwrap();
 
-    wait_until_balance(&alice, alice_fund_amount, Amount::ZERO).await;
-    wait_until_balance(&bob, bob_fund_amount, Amount::ZERO).await;
-    wait_until_balance(&claire, claire_fund_amount, Amount::ZERO).await;
+    wait_until_balance(&alice, alice_fund_amount, Amount::ZERO)
+        .await
+        .unwrap();
+    wait_until_balance(&bob, bob_fund_amount, Amount::ZERO)
+        .await
+        .unwrap();
+    wait_until_balance(&claire, claire_fund_amount, Amount::ZERO)
+        .await
+        .unwrap();
 
     let (alice_offchain_address, _) = alice.get_offchain_address().unwrap();
     let (bob_offchain_address, _) = bob.get_offchain_address().unwrap();
@@ -122,31 +128,32 @@ pub async fn concurrent_boarding() {
         Amount::ZERO,
         alice_fund_amount - alice_to_bob_send_amount + claire_to_alice_send_amount,
     )
-    .await;
+    .await
+    .unwrap();
 
     // Checking Bob and Claire's balance is inconsistent because of coin selection.
 
     let alice_task = tokio::spawn({
         async move {
             let mut rng = StdRng::from_entropy();
-            alice.board(&mut rng, false).await.unwrap();
+            alice.settle(&mut rng, false).await.unwrap();
             alice
         }
     });
 
     let bob_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        bob.board(&mut rng, false).await.unwrap();
+        bob.settle(&mut rng, false).await.unwrap();
         bob
     });
 
     let claire_task = tokio::spawn(async move {
         let mut rng = StdRng::from_entropy();
-        claire.board(&mut rng, false).await.unwrap();
+        claire.settle(&mut rng, false).await.unwrap();
         claire
     });
 
-    // Three parties joining a round concurrently.
+    // Three parties joining a batch concurrently.
     let (alice, bob, claire) = try_join!(alice_task, bob_task, claire_task).unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -155,17 +162,20 @@ pub async fn concurrent_boarding() {
         alice_fund_amount - alice_to_bob_send_amount + claire_to_alice_send_amount,
         Amount::ZERO,
     )
-    .await;
+    .await
+    .unwrap();
     wait_until_balance(
         &bob,
         bob_fund_amount - bob_to_claire_send_amount + alice_to_bob_send_amount,
         Amount::ZERO,
     )
-    .await;
+    .await
+    .unwrap();
     wait_until_balance(
         &claire,
         claire_fund_amount - claire_to_alice_send_amount + bob_to_claire_send_amount,
         Amount::ZERO,
     )
-    .await;
+    .await
+    .unwrap();
 }

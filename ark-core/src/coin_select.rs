@@ -3,35 +3,35 @@ use bitcoin::Amount;
 use bitcoin::OutPoint;
 
 #[derive(Clone, Debug)]
-pub struct VtxoOutPoint {
+pub struct VirtualTxOutPoint {
     pub outpoint: OutPoint,
     pub expire_at: i64,
     pub amount: Amount,
 }
 
-/// Select VTXOs to be used as inputs in redeem (out-of-round) transactions.
+/// Select VTXOs to be used as inputs in Ark transactions.
 pub fn select_vtxos(
-    mut vtxo_outpoints: Vec<VtxoOutPoint>,
+    mut virtual_tx_outpoints: Vec<VirtualTxOutPoint>,
     amount: Amount,
     dust: Amount,
     sort_by_expiration_time: bool,
-) -> Result<Vec<VtxoOutPoint>, Error> {
+) -> Result<Vec<VirtualTxOutPoint>, Error> {
     let mut selected = Vec::new();
     let mut not_selected = Vec::new();
     let mut selected_amount = Amount::ZERO;
 
     if sort_by_expiration_time {
         // Sort vtxos by expiration (older first)
-        vtxo_outpoints.sort_by(|a, b| a.expire_at.cmp(&b.expire_at));
+        virtual_tx_outpoints.sort_by(|a, b| a.expire_at.cmp(&b.expire_at));
     }
 
     // Process VTXOs
-    for vtxo_outpoint in vtxo_outpoints {
+    for virtual_tx_outpoint in virtual_tx_outpoints {
         if selected_amount >= amount {
-            not_selected.push(vtxo_outpoint);
+            not_selected.push(virtual_tx_outpoint);
         } else {
-            selected.push(vtxo_outpoint.clone());
-            selected_amount += vtxo_outpoint.amount;
+            selected.push(virtual_tx_outpoint.clone());
+            selected_amount += virtual_tx_outpoint.amount;
         }
     }
 
@@ -57,8 +57,8 @@ pub fn select_vtxos(
 mod tests {
     use super::*;
 
-    fn vtxo(expire_at: i64, amount: Amount) -> VtxoOutPoint {
-        VtxoOutPoint {
+    fn vtxo(expire_at: i64, amount: Amount) -> VirtualTxOutPoint {
+        VirtualTxOutPoint {
             expire_at,
             amount,
             outpoint: OutPoint::default(),

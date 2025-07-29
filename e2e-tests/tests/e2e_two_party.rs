@@ -56,7 +56,7 @@ pub async fn e2e() {
     assert_eq!(alice_offchain_balance.total(), Amount::ZERO);
     assert_eq!(bob_offchain_balance.total(), Amount::ZERO);
 
-    alice.board(&mut rng, false).await.unwrap();
+    alice.settle(&mut rng, false).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
@@ -103,10 +103,13 @@ pub async fn e2e() {
         Amount::ZERO,
         alice_fund_amount - send_to_bob_vtxo_amount,
     )
-    .await;
-    wait_until_balance(&bob, Amount::ZERO, send_to_bob_vtxo_amount).await;
+    .await
+    .unwrap();
+    wait_until_balance(&bob, Amount::ZERO, send_to_bob_vtxo_amount)
+        .await
+        .unwrap();
 
-    bob.board(&mut rng, false).await.unwrap();
+    bob.settle(&mut rng, false).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
@@ -126,7 +129,7 @@ pub async fn e2e() {
     assert_eq!(bob_offchain_balance.confirmed(), send_to_bob_vtxo_amount);
     assert_eq!(bob_offchain_balance.pending(), Amount::ZERO);
 
-    alice.board(&mut rng, false).await.unwrap();
+    alice.settle(&mut rng, false).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();

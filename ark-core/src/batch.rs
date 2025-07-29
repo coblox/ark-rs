@@ -1,9 +1,9 @@
 use crate::anchor_output;
 use crate::conversions::from_musig_xonly;
 use crate::conversions::to_musig_pk;
-use crate::internal_node::VtxoTreeInternalNodeScript;
 use crate::server::NoncePks;
 use crate::server::PartialSigTree;
+use crate::tree_tx_output_script::TreeTxOutputScript;
 use crate::BoardingOutput;
 use crate::Error;
 use crate::ErrorContext;
@@ -81,7 +81,7 @@ impl OnChainInput {
     }
 }
 
-/// Either a confirmed VTXO that needs to be refreshed, or an unconfirmed VTXO that needs
+/// Either a confirmed VTXO that needs to be renewed, or an pre-confirmed VTXO that needs
 /// confirmation.
 ///
 /// Alternatively, the owner of this VTXO may decide to spend it into a vanilla UTXO.
@@ -119,19 +119,19 @@ impl VtxoInput {
     }
 }
 
-/// A nonce key pair per shared internal (non-leaf) node in the VTXO tree.
+/// A nonce key pair per tree transaction output that we are a part of in the batch.
 ///
-/// The [`MusigSecNonce`] element of the tuple is an [`Option`] because it cannot be cloned or
-/// copied. We use the [`Option`] to move it into the [`NonceTree`] during nonce generation, and out
-/// of the [`NonceTree`] when signing the VTXO tree.
+/// The [`musig::SecretNonce`] element of the tuple is an [`Option`] because it cannot be cloned or
+/// copied. When we are ready to sign a tree transaction, we call the method `take_sk` to move out
+/// of the [`Option`].
 #[allow(clippy::type_complexity)]
 pub struct NonceKps(HashMap<Txid, (Option<musig::SecretNonce>, musig::PublicNonce)>);
 
 impl NonceKps {
-    /// Take ownership of the [`MusigSecNonce`] for the transaction identified by `txid`.
+    /// Take ownership of the [`musig::SecretNonce`] for the transaction identified by `txid`.
     ///
-    /// The caller must take ownership because the [`MusigSecNonce`] ensures that it can only be
-    /// used once, to avoid nonce reuse.
+    /// The caller must take ownership because the [`musig::SecretNonce`] ensures that it can only
+    /// be used once, to avoid nonce reuse.
     pub fn take_sk(&mut self, txid: &Txid) -> Option<musig::SecretNonce> {
         self.0.get_mut(txid).and_then(|(sec, _)| sec.take())
     }
@@ -148,28 +148,28 @@ impl NonceKps {
     }
 }
 
-/// Generate a nonce pair for each internal (non-leaf) node in the VTXO tree.
+/// Generate a nonce key pair for each tree transaction output that we are a part of in the batch.
 pub fn generate_nonce_tree<R>(
     rng: &mut R,
-    unsigned_vtxo_graph: &TxGraph,
+    batch_tree_tx_graph: &TxGraph,
     own_cosigner_pk: PublicKey,
-    round_tx: &Psbt,
+    commitment_tx: &Psbt,
 ) -> Result<NonceKps, Error>
 where
     R: Rng + CryptoRng,
 {
     let secp_musig = ::musig::Secp256k1::new();
 
-    let tx_map = unsigned_vtxo_graph.as_map();
+    let batch_tree_tx_map = batch_tree_tx_graph.as_map();
 
-    let nonce_tree = tx_map
+    let nonce_tree = batch_tree_tx_map
         .iter()
-        .map(|(txid, node_tx)| {
-            let cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(node_tx)?;
+        .map(|(txid, tx)| {
+            let cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(tx)?;
 
             if !cosigner_pks.contains(&own_cosigner_pk) {
                 return Err(Error::crypto(format!(
-                    "cosigner PKs does not contain {own_cosigner_pk} for TX {txid}"
+                    "cosigner PKs does not contain {own_cosigner_pk} for tree TX {txid}"
                 )));
             }
 
@@ -179,7 +179,7 @@ where
             let session_id = musig::SessionSecretRand::new();
             let extra_rand = rng.gen();
 
-            let msg = virtual_tx_sighash(node_tx, &tx_map, round_tx)?;
+            let msg = tree_tx_sighash(tx, &batch_tree_tx_map, commitment_tx)?;
 
             let key_agg_cache = {
                 let cosigner_pks = cosigner_pks
@@ -204,15 +204,15 @@ where
     Ok(NonceKps(nonce_tree))
 }
 
-fn virtual_tx_sighash(
-    // The virtual transaction to be signed.
-    node_tx: &Psbt,
-    // The entire virtual TX set for this batch, so that the parent output can be found, if needed.
+fn tree_tx_sighash(
+    // The tree PSBT to be signed.
+    psbt: &Psbt,
+    // The entire tree TX set for this batch, to look for the previous output.
     tx_map: &HashMap<Txid, &Psbt>,
-    // The round transaction, in case it is the parent VTXO.
-    round_tx: &Psbt,
+    // The commitment transaction, in case it contains the previous output.
+    commitment_tx: &Psbt,
 ) -> Result<::musig::Message, Error> {
-    let tx = &node_tx.unsigned_tx;
+    let tx = &psbt.unsigned_tx;
 
     // We expect a single input to a VTXO.
     let previous_output = tx.input[VTXO_INPUT_INDEX].previous_output;
@@ -220,13 +220,14 @@ fn virtual_tx_sighash(
     let parent_tx = tx_map
         .get(&previous_output.txid)
         .or_else(|| {
-            (previous_output.txid == round_tx.unsigned_tx.compute_txid()).then_some(&round_tx)
+            (previous_output.txid == commitment_tx.unsigned_tx.compute_txid())
+                .then_some(&commitment_tx)
         })
         .ok_or_else(|| {
             Error::crypto(format!(
-                "parent transaction {} not found for virtual TX {}",
+                "parent transaction {} not found for tree TX {}",
                 previous_output.txid,
-                node_tx.unsigned_tx.compute_txid()
+                tx.compute_txid()
             ))
         })?;
     let previous_output = parent_tx
@@ -235,18 +236,18 @@ fn virtual_tx_sighash(
         .get(previous_output.vout as usize)
         .ok_or_else(|| {
             Error::crypto(format!(
-                "previous output {} not found for virtual TX {}",
+                "previous output {} not found for tree TX {}",
                 previous_output,
-                node_tx.unsigned_tx.compute_txid()
+                tx.compute_txid()
             ))
         })?;
 
     let prevouts = [previous_output];
     let prevouts = Prevouts::All(&prevouts);
 
-    // Here we are generating a key spend sighash, because the VTXO tree outputs are signed
-    // by all parties with a VTXO in this new round, so we use a musig key spend to
-    // efficiently coordinate all the parties.
+    // Here we are generating a key spend sighash, because batch tree outputs are signed by parties
+    // with VTXOs in this new batch. We use a musig key spend to efficiently coordinate with all the
+    // parties.
     let tap_sighash = SighashCache::new(tx)
         .taproot_key_spend_signature_hash(VTXO_INPUT_INDEX, &prevouts, TapSighashType::Default)
         .map_err(Error::crypto)?;
@@ -255,21 +256,21 @@ fn virtual_tx_sighash(
     Ok(msg)
 }
 
-/// Sign each shared internal (non-leaf) node of the VTXO tree with `own_cosigner_kp` and using
-/// `our_nonce_tree` to provide our share of each aggregate nonce.
+/// Use `own_cosigner_kp` to sign each batch tree transaction output that we are a part, using
+/// `our_nonce_kps` to provide our share of each aggregate nonce.
 #[allow(clippy::too_many_arguments)]
-pub fn sign_vtxo_tree(
+pub fn sign_batch_tree(
     vtxo_tree_expiry: bitcoin::Sequence,
     server_pk: XOnlyPublicKey,
     own_cosigner_kp: &Keypair,
-    vtxo_graph: &TxGraph,
-    round_tx: &Psbt,
+    batch_tree_tx_graph: &TxGraph,
+    commitment_psbt: &Psbt,
     mut our_nonce_kps: NonceKps,
     aggregate_nonce_pks: &NoncePks,
 ) -> Result<PartialSigTree, Error> {
     let own_cosigner_pk = own_cosigner_kp.public_key();
 
-    let internal_node_script = VtxoTreeInternalNodeScript::new(vtxo_tree_expiry, server_pk);
+    let internal_node_script = TreeTxOutputScript::new(vtxo_tree_expiry, server_pk);
 
     let secp = Secp256k1::new();
     let secp_musig = ::musig::Secp256k1::new();
@@ -278,18 +279,18 @@ pub fn sign_vtxo_tree(
         ::musig::Keypair::from_seckey_slice(&secp_musig, &own_cosigner_kp.secret_bytes())
             .expect("valid keypair");
 
-    let tx_map = vtxo_graph.as_map();
+    let batch_tree_tx_map = batch_tree_tx_graph.as_map();
 
     let mut partial_sig_tree = HashMap::new();
-    for (node_txid, node_tx) in tx_map.iter() {
-        let mut cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(node_tx)?;
+    for (txid, psbt) in batch_tree_tx_map.iter() {
+        let mut cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(psbt)?;
         cosigner_pks.sort_by_key(|k| k.serialize());
 
         if !cosigner_pks.contains(&own_cosigner_pk) {
             continue;
         }
 
-        tracing::debug!(%node_txid, "Generating partial signature");
+        tracing::debug!(%txid, "Generating partial signature");
 
         let mut key_agg_cache = {
             let cosigner_pks = cosigner_pks
@@ -311,18 +312,18 @@ pub fn sign_vtxo_tree(
             .pubkey_xonly_tweak_add(&secp_musig, &tweak)
             .map_err(Error::crypto)?;
 
-        let agg_pub_nonce = aggregate_nonce_pks.get(node_txid).ok_or_else(|| {
-            Error::crypto(format!("missing pub nonce for virtual TX {node_txid}"))
-        })?;
+        let agg_pub_nonce = aggregate_nonce_pks
+            .get(txid)
+            .ok_or_else(|| Error::crypto(format!("missing pub nonce for tree TX {txid}")))?;
 
         // Equivalent to parsing the individual `MusigAggNonce` from a slice.
         let agg_nonce = musig::AggregatedNonce::new(&secp_musig, &[&agg_pub_nonce]);
 
-        let msg = virtual_tx_sighash(node_tx, &tx_map, round_tx)?;
+        let msg = tree_tx_sighash(psbt, &batch_tree_tx_map, commitment_psbt)?;
 
         let nonce_sk = our_nonce_kps
-            .take_sk(node_txid)
-            .ok_or(Error::crypto("missing nonce for virtual TX {node_txid}"))?;
+            .take_sk(txid)
+            .ok_or_else(|| Error::crypto(format!("missing nonce for tree TX {txid}")))?;
 
         let sig = musig::Session::new(&secp_musig, &key_agg_cache, agg_nonce, msg).partial_sign(
             &secp_musig,
@@ -331,13 +332,13 @@ pub fn sign_vtxo_tree(
             &key_agg_cache,
         );
 
-        partial_sig_tree.insert(*node_txid, sig);
+        partial_sig_tree.insert(*txid, sig);
     }
 
     Ok(PartialSigTree(partial_sig_tree))
 }
 
-/// Build and sign a forfeit transaction per [`VtxoInput`] to be used in an upcoming round
+/// Build and sign a forfeit transaction per [`VtxoInput`] to be used in an upcoming commitment
 /// transaction.
 pub fn create_and_sign_forfeit_txs(
     // For now we only support a single keypair. Eventually we may need to provide something like a
@@ -362,7 +363,7 @@ pub fn create_and_sign_forfeit_txs(
     for VtxoInput {
         vtxo,
         amount: vtxo_amount,
-        outpoint: vtxo_outpoint,
+        outpoint: virtual_tx_outpoint,
         is_recoverable,
     } in vtxo_inputs.iter()
     {
@@ -371,9 +372,9 @@ pub fn create_and_sign_forfeit_txs(
             continue;
         }
 
-        let connector_outpoint = connector_index.get(vtxo_outpoint).ok_or_else(|| {
+        let connector_outpoint = connector_index.get(virtual_tx_outpoint).ok_or_else(|| {
             Error::ad_hoc(format!(
-                "connector outpoint missing for VTXO outpoint {vtxo_outpoint}"
+                "connector outpoint missing for virtual TX outpoint {virtual_tx_outpoint}"
             ))
         })?;
 
@@ -382,7 +383,7 @@ pub fn create_and_sign_forfeit_txs(
             .find(|l| l.unsigned_tx.compute_txid() == connector_outpoint.txid)
             .ok_or_else(|| {
                 Error::ad_hoc(format!(
-                    "connector PSBT missing for VTXO outpoint {vtxo_outpoint}"
+                    "connector PSBT missing for virtual TX outpoint {virtual_tx_outpoint}"
                 ))
             })?;
 
@@ -392,7 +393,7 @@ pub fn create_and_sign_forfeit_txs(
             .get(connector_outpoint.vout as usize)
             .ok_or_else(|| {
                 Error::ad_hoc(format!(
-                    "connector output missing for VTXO outpoint {vtxo_outpoint}"
+                    "connector output missing for virtual TX outpoint {virtual_tx_outpoint}"
                 ))
             })?;
 
@@ -410,7 +411,7 @@ pub fn create_and_sign_forfeit_txs(
                     ..Default::default()
                 },
                 TxIn {
-                    previous_output: *vtxo_outpoint,
+                    previous_output: *virtual_tx_outpoint,
                     ..Default::default()
                 },
             ],
@@ -478,10 +479,10 @@ pub fn create_and_sign_forfeit_txs(
     Ok(signed_forfeit_psbts)
 }
 
-/// Sign every input of the `round_psbt` which is in the provided `onchain_inputs` list.
-pub fn sign_round_psbt<F>(
+/// Sign every input of the `commitment_psbt` which is in the provided `onchain_inputs` list.
+pub fn sign_commitment_psbt<F>(
     sign_for_pk_fn: F,
-    round_psbt: &mut Psbt,
+    commitment_psbt: &mut Psbt,
     onchain_inputs: &[OnChainInput],
 ) -> Result<(), Error>
 where
@@ -489,15 +490,14 @@ where
 {
     let secp = Secp256k1::new();
 
-    let prevouts = round_psbt
+    let prevouts = commitment_psbt
         .inputs
         .iter()
         .filter_map(|i| i.witness_utxo.clone())
         .collect::<Vec<_>>();
 
-    // Sign round transaction inputs that belong to us. For every output we
-    // are boarding, we look through the round transaction inputs to find a
-    // matching input.
+    // Sign commitment transaction inputs that belong to us. For every output we are settling, we
+    // look through the commitment transaction inputs to find a matching input.
     for OnChainInput {
         boarding_output,
         outpoint: boarding_outpoint,
@@ -506,8 +506,8 @@ where
     {
         let (forfeit_script, forfeit_control_block) = boarding_output.forfeit_spend_info();
 
-        for (i, input) in round_psbt.inputs.iter_mut().enumerate() {
-            let previous_outpoint = round_psbt.unsigned_tx.input[i].previous_output;
+        for (i, input) in commitment_psbt.inputs.iter_mut().enumerate() {
+            let previous_outpoint = commitment_psbt.unsigned_tx.input[i].previous_output;
 
             if previous_outpoint == *boarding_outpoint {
                 // In the case of a boarding output, we are actually using a
@@ -523,7 +523,7 @@ where
 
                 let leaf_hash = TapLeafHash::from_script(&forfeit_script, leaf_version);
 
-                let tap_sighash = SighashCache::new(&round_psbt.unsigned_tx)
+                let tap_sighash = SighashCache::new(&commitment_psbt.unsigned_tx)
                     .taproot_script_spend_signature_hash(
                         i,
                         &prevouts,
@@ -540,7 +540,7 @@ where
 
                 secp.verify_schnorr(&sig, &msg, &pk)
                     .map_err(Error::crypto)
-                    .context("failed to verify own round TX signature")?;
+                    .context("failed to verify own commitment TX signature")?;
 
                 let sig = taproot::Signature {
                     signature: sig,
@@ -578,31 +578,32 @@ fn derive_vtxo_connector_map(
     // Sort connector outpoints for deterministic ordering
     connector_outpoints.sort_by(|a, b| a.txid.cmp(&b.txid).then(a.vout.cmp(&b.vout)));
 
-    // Get VTXO outpoints that need forfeiting (excluding recoverable ones).
-    let mut vtxo_outpoints = Vec::new();
+    // Get virtual TX outpoints that need forfeiting (excluding recoverable ones).
+    let mut virtual_tx_outpoints = Vec::new();
     for vtxo_input in vtxo_inputs.iter() {
         if !vtxo_input.is_recoverable {
-            vtxo_outpoints.push(vtxo_input.outpoint);
+            virtual_tx_outpoints.push(vtxo_input.outpoint);
         }
     }
 
-    // Sort VTXO outpoints for deterministic ordering.
-    vtxo_outpoints.sort_by(|a, b| a.txid.cmp(&b.txid).then(a.vout.cmp(&b.vout)));
+    // Sort virtual TX outpoints for deterministic ordering.
+    virtual_tx_outpoints.sort_by(|a, b| a.txid.cmp(&b.txid).then(a.vout.cmp(&b.vout)));
 
     // Ensure we have matching counts.
-    if vtxo_outpoints.len() != connector_outpoints.len() {
+    if virtual_tx_outpoints.len() != connector_outpoints.len() {
         return Err(Error::ad_hoc(format!(
             "mismatch between VTXO count ({}) and connector count ({})",
-            vtxo_outpoints.len(),
+            virtual_tx_outpoints.len(),
             connector_outpoints.len()
         )));
     }
 
     // Create mapping by position.
     let mut map = HashMap::new();
-    for (vtxo_outpoint, connector_outpoint) in vtxo_outpoints.iter().zip(connector_outpoints.iter())
+    for (virtual_tx_outpoint, connector_outpoint) in
+        virtual_tx_outpoints.iter().zip(connector_outpoints.iter())
     {
-        map.insert(*vtxo_outpoint, *connector_outpoint);
+        map.insert(*virtual_tx_outpoint, *connector_outpoint);
     }
 
     Ok(map)

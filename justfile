@@ -36,7 +36,7 @@ gen-grpc:
 ## -------------------------
 ## Local development setup
 ## -------------------------
-# Checkout ark (https://github.com/ark-network/ark) in a local directory
+# Checkout ark (https://github.com/arkade-os/arkd) in a local directory
 # Run with `just arkd-checkout "master"`  to checkout and sync latest master or
 
 # `just arkd-checkout "da64028e06056b115d91588fb1103021b04008ad"`to checkout a specific commit
@@ -51,10 +51,10 @@ arkd-checkout tag:
 
     CHANGES_STASHED=false
 
-    if [ -d "ark" ]; then
+    if [ -d "arkd" ]; then
         # Repository exists, update it
         echo "Directory exists, refreshing..."
-        cd ark
+        cd arkd
 
         # Check for local changes and stash them if they exist
         if ! git diff --quiet || ! git diff --staged --quiet; then
@@ -83,8 +83,8 @@ arkd-checkout tag:
     else
         echo "Directory does not exist, checking it out..."
         # Clone new repository
-        git clone https://github.com/ark-network/ark.git
-        cd ark
+        git clone https://github.com/arkade-os/arkd.git
+        cd arkd
     fi
 
     if [ ! -z "$1" ]; then
@@ -111,7 +111,7 @@ arkd-setup:
 
     just arkd-redis-run
 
-    echo "Running arkd from $ARKD_WALLET_DIR"
+    echo "Running arkd from $ARKD_DIR"
 
     just arkd-wallet-run
 
@@ -158,7 +158,7 @@ arkd-wallet-run:
 
     set -euxo pipefail
 
-    make run-bitcoind -C $ARKD_WALLET_DIR run &> {{ arkd_wallet_logs }} &
+    make run-wallet-bitcoind -C $ARKD_DIR run &> {{ arkd_wallet_logs }} &
 
     just _create-arkd-wallet
 
@@ -247,8 +247,8 @@ arkd-wipe:
 
 # Wipe `arkd-wallet` data directory.
 arkd-wallet-wipe:
-    @echo Clearing $ARKD_WALLET_DIR/data
-    rm -rf $ARKD_WALLET_DIR/data
+    @echo Clearing $ARKD_DIR/data
+    rm -rf $ARKD_DIR/data
 
 arkd-redis-wipe:
     @echo Stopping and clearing arkd redis

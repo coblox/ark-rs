@@ -30,7 +30,7 @@ pub async fn send_subdust_amount() {
         .faucet_fund(&alice.get_boarding_address().unwrap(), alice_fund_amount)
         .await;
 
-    alice.board(&mut rng, false).await.unwrap();
+    alice.settle(&mut rng, false).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let alice_offchain_balance = alice.offchain_balance().await.unwrap();
@@ -46,7 +46,9 @@ pub async fn send_subdust_amount() {
         .unwrap();
 
     // Available balance does not include sub-dust amounts, so we cannot wait on Bob's balance.
-    wait_until_balance(&alice, Amount::ZERO, alice_fund_amount - sub_dust_amount).await;
+    wait_until_balance(&alice, Amount::ZERO, alice_fund_amount - sub_dust_amount)
+        .await
+        .unwrap();
 
     let (alice_offchain_address, _) = alice.get_offchain_address().unwrap();
 
@@ -54,7 +56,7 @@ pub async fn send_subdust_amount() {
         .await
         .expect_err("should not be able to send sub-dust amount");
 
-    bob.board(&mut rng, true)
+    bob.settle(&mut rng, true)
         .await
         .expect_err("should not be able to board sub-dust amount");
 
@@ -71,10 +73,15 @@ pub async fn send_subdust_amount() {
         Amount::ZERO,
         alice_fund_amount - regular_amount - sub_dust_amount,
     )
-    .await;
-    wait_until_balance(&bob, Amount::ZERO, regular_amount).await;
+    .await
+    .unwrap();
+    wait_until_balance(&bob, Amount::ZERO, regular_amount)
+        .await
+        .unwrap();
 
-    bob.board(&mut rng, true).await.unwrap();
+    bob.settle(&mut rng, true).await.unwrap();
 
-    wait_until_balance(&bob, regular_amount + sub_dust_amount, Amount::ZERO).await;
+    wait_until_balance(&bob, regular_amount + sub_dust_amount, Amount::ZERO)
+        .await
+        .unwrap();
 }

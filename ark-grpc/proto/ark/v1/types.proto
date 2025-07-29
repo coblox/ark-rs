@@ -14,11 +14,6 @@ message Input {
   Tapscripts taproot_tree = 2;
 }
 
-message Output {
-  string address = 1; // onchain or off-chain
-  uint64 amount = 2; // Amount to send in satoshis.
-}
-
 message Vtxo {
   Outpoint outpoint = 1;
   uint64 amount = 2;
@@ -83,7 +78,7 @@ message BatchFinalizedEvent {
   string commitment_txid = 2;
 }
 
-message BatchFailed {
+message BatchFailedEvent {
   string id = 1;
   string reason = 2;
 }

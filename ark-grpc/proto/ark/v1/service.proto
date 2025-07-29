@@ -154,7 +154,7 @@ message RegisterIntentResponse {
 message DeleteIntentRequest {
   // A BIP322 signature that includes any of the inputs of the intent to be deleted to prove the
   // ownership of that intent.
-  Bip322Signature proof = 2;
+  Bip322Signature proof = 1;
 }
 message DeleteIntentResponse {}
 
@@ -193,7 +193,7 @@ message GetEventStreamResponse {
     BatchStartedEvent batch_started = 1;
     BatchFinalizationEvent batch_finalization = 2;
     BatchFinalizedEvent batch_finalized = 3;
-    BatchFailed batch_failed = 4;
+    BatchFailedEvent batch_failed = 4;
     TreeSigningStartedEvent tree_signing_started = 5;
     TreeNoncesAggregatedEvent tree_nonces_aggregated = 6;
     TreeTxEvent tree_tx = 7;

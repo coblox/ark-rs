@@ -2,25 +2,26 @@ use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
+use ark_core::batch;
+use ark_core::batch::create_and_sign_forfeit_txs;
+use ark_core::batch::generate_nonce_tree;
+use ark_core::batch::sign_batch_tree;
+use ark_core::batch::sign_commitment_psbt;
 use ark_core::boarding_output::list_boarding_outpoints;
 use ark_core::boarding_output::BoardingOutpoints;
 use ark_core::proof_of_funds;
-use ark_core::redeem;
-use ark_core::redeem::build_offchain_transactions;
-use ark_core::redeem::sign_checkpoint_transaction;
-use ark_core::redeem::sign_offchain_virtual_transaction;
-use ark_core::redeem::OffchainTransactions;
-use ark_core::round;
-use ark_core::round::create_and_sign_forfeit_txs;
-use ark_core::round::generate_nonce_tree;
-use ark_core::round::sign_round_psbt;
-use ark_core::round::sign_vtxo_tree;
+use ark_core::send;
+use ark_core::send::build_offchain_transactions;
+use ark_core::send::sign_ark_transaction;
+use ark_core::send::sign_checkpoint_transaction;
+use ark_core::send::OffchainTransactions;
 use ark_core::server;
 use ark_core::server::BatchTreeEventType;
-use ark_core::server::RoundStreamEvent;
-use ark_core::server::VtxoOutPoint;
+use ark_core::server::GetVtxosRequest;
+use ark_core::server::StreamEvent;
+use ark_core::server::VirtualTxOutPoint;
 use ark_core::vtxo::list_virtual_tx_outpoints;
-use ark_core::vtxo::VirtualTxOutpoints;
+use ark_core::vtxo::VirtualTxOutPoints;
 use ark_core::ArkAddress;
 use ark_core::BoardingOutput;
 use ark_core::ExplorerUtxo;
@@ -122,7 +123,7 @@ async fn main() -> Result<()> {
     let shared_pk = from_zkp_xonly(shared_pk);
 
     // A path that lets Alice and Bob reclaim (with the server's help) their funds, some time after
-    // the oracle attests to the outcome of a relevant event, but _before_ the round ends. Thus,
+    // the oracle attests to the outcome of a relevant event, but _before_ the batch ends. Thus,
     // choosing the timelock correctly is very important.
     //
     // We don't use this path in this example, but including it in the Tapscript demonstrates that
@@ -150,7 +151,7 @@ async fn main() -> Result<()> {
     // We build the DLC funding transaction, but we don't "broadcast" it yet. We use it as a
     // reference point to build the rest of the DLC.
     let OffchainTransactions {
-        virtual_tx: mut dlc_virtual_tx,
+        ark_tx: mut dlc_virtual_tx,
         checkpoint_txs: dlc_checkpoint_txs,
     } = build_offchain_transactions(
         &[(
@@ -187,7 +188,7 @@ async fn main() -> Result<()> {
         server_info.network,
     )?;
 
-    let dlc_vtxo_input = redeem::VtxoInput::new(dlc_vtxo, dlc_output.value, dlc_outpoint);
+    let dlc_vtxo_input = send::VtxoInput::new(dlc_vtxo, dlc_output.value, dlc_outpoint);
 
     // We build a refund transaction spending from the DLC VTXO.
     let alice_refund_payout = alice_fund_amount;
@@ -295,7 +296,7 @@ async fn main() -> Result<()> {
 
     // Finally, Alice and Bob sign the DLC funding transaction.
 
-    sign_offchain_virtual_transaction(
+    sign_ark_transaction(
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let sig = secp.sign_schnorr_no_aux_rand(&msg, &alice_kp);
 
@@ -310,7 +311,7 @@ async fn main() -> Result<()> {
     )
     .context("failed to sign DLC-funding virtual TX as Alice")?;
 
-    sign_offchain_virtual_transaction(
+    sign_ark_transaction(
         |msg: secp256k1::Message| -> Result<(schnorr::Signature, XOnlyPublicKey), ark_core::Error> {
             let sig = secp.sign_schnorr_no_aux_rand(&msg, &bob_kp);
 
@@ -589,7 +590,7 @@ async fn fund_vtxo(
     server_info: &server::Info,
     kp: &Keypair,
     amount: Amount,
-) -> Result<redeem::VtxoInput> {
+) -> Result<send::VtxoInput> {
     let secp = Secp256k1::new();
 
     let pk = kp.public_key().x_only_public_key().0;
@@ -620,26 +621,27 @@ async fn fund_vtxo(
         server_info.network,
     )?;
 
-    let round_txid = settle(
+    let commitment_txid = settle(
         grpc_client,
         server_info,
         kp.secret_key(),
-        VirtualTxOutpoints::default(),
+        VirtualTxOutPoints::default(),
         boarding_outpoints,
         vtxo.to_ark_address(),
     )
     .await?
-    .ok_or(anyhow!("did not join round"))?;
+    .ok_or(anyhow!("did not join batch"))?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let vtxo_list = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
+    let request = GetVtxosRequest::new_for_addresses(&[vtxo.to_ark_address()]);
+    let vtxo_list = grpc_client.list_vtxos(request).await?;
     let virtual_tx_outpoint = vtxo_list
         .spendable()
         .iter()
-        .find(|v| v.commitment_txids[0] == round_txid)
-        .ok_or(anyhow!("could not find input in round"))?;
-    let vtxo_input = redeem::VtxoInput::new(
+        .find(|v| v.commitment_txids[0] == commitment_txid)
+        .ok_or(anyhow!("could not find input in batch"))?;
+    let vtxo_input = send::VtxoInput::new(
         vtxo,
         virtual_tx_outpoint.amount,
         virtual_tx_outpoint.outpoint,
@@ -665,13 +667,13 @@ fn sign_refund_offchain_transactions(
     alice_kp: &Keypair,
     bob_kp: &Keypair,
     musig_key_agg_cache: &MusigKeyAggCache,
-    dlc_vtxo_input: &redeem::VtxoInput,
+    dlc_vtxo_input: &send::VtxoInput,
 ) -> Result<SignedRefundOffchainTransactions> {
     let zkp = zkp::Secp256k1::new();
     let mut rng = thread_rng();
 
     let OffchainTransactions {
-        virtual_tx: mut refund_virtual_tx,
+        ark_tx: mut refund_virtual_tx,
         checkpoint_txs: refund_checkpoint_txs,
     } = offchain_txs;
 
@@ -745,7 +747,7 @@ fn sign_refund_offchain_transactions(
             Ok((sig, shared_pk))
         };
 
-        sign_offchain_virtual_transaction(
+        sign_ark_transaction(
             sign_fn,
             &mut refund_virtual_tx,
             &[(refund_checkpoint_output, refund_checkpoint_outpoint)],
@@ -855,13 +857,13 @@ fn sign_cet_offchain_txs(
     bob_kp: &Keypair,
     musig_key_agg_cache: &MusigKeyAggCache,
     adaptor_pk: zkp::PublicKey,
-    dlc_vtxo_input: &redeem::VtxoInput,
+    dlc_vtxo_input: &send::VtxoInput,
 ) -> Result<SignedCetOffchainTransactions> {
     let zkp = zkp::Secp256k1::new();
     let mut rng = thread_rng();
 
     let OffchainTransactions {
-        virtual_tx: mut virtual_cet,
+        ark_tx: mut virtual_cet,
         checkpoint_txs: cet_checkpoint_txs,
     } = offchain_txs;
 
@@ -944,7 +946,7 @@ fn sign_cet_offchain_txs(
             Ok((sig, shared_pk))
         };
 
-        sign_offchain_virtual_transaction(
+        sign_ark_transaction(
             sign_fn,
             &mut virtual_cet,
             &[(cet_checkpoint_output, cet_checkpoint_outpoint)],
@@ -1135,7 +1137,7 @@ async fn settle(
     grpc_client: &ark_grpc::Client,
     server_info: &server::Info,
     sk: SecretKey,
-    virtual_tx_outpoints: VirtualTxOutpoints,
+    virtual_tx_outpoints: VirtualTxOutPoints,
     boarding_outpoints: BoardingOutpoints,
     to_address: ArkAddress,
 ) -> Result<Option<Txid>> {
@@ -1148,7 +1150,7 @@ async fn settle(
 
     let cosigner_kp = Keypair::new(&secp, &mut rng);
 
-    let round_inputs = {
+    let batch_inputs = {
         let boarding_inputs = boarding_outpoints.spendable.clone().into_iter().map(
             |(outpoint, amount, boarding_output)| {
                 proof_of_funds::Input::new(
@@ -1185,11 +1187,11 @@ async fn settle(
 
         boarding_inputs.chain(vtxo_inputs).collect::<Vec<_>>()
     };
-    let n_round_inputs = round_inputs.len();
+    let n_batch_inputs = batch_inputs.len();
 
     let spendable_amount =
         boarding_outpoints.spendable_balance() + virtual_tx_outpoints.spendable_balance();
-    let round_outputs = vec![proof_of_funds::Output::Offchain(TxOut {
+    let batch_outputs = vec![proof_of_funds::Output::Offchain(TxOut {
         value: spendable_amount,
         script_pubkey: to_address.to_p2tr_script_pubkey(),
     })];
@@ -1211,8 +1213,8 @@ async fn settle(
     let (bip322_proof, intent_message) = proof_of_funds::make_bip322_signature(
         &signing_kp,
         sign_for_onchain_pk_fn,
-        round_inputs,
-        round_outputs,
+        batch_inputs,
+        batch_outputs,
         own_cosigner_pks.clone(),
     )?;
 
@@ -1238,8 +1240,8 @@ async fn settle(
     let mut vtxo_graph_chunks = Vec::new();
 
     let batch_started_event = match event_stream.next().await {
-        Some(Ok(RoundStreamEvent::BatchStarted(e))) => e,
-        other => bail!("Did not get round signing event: {other:?}"),
+        Some(Ok(StreamEvent::BatchStarted(e))) => e,
+        other => bail!("Did not get batch signing event: {other:?}"),
     };
 
     let hash = sha256::Hash::hash(intent_id.as_bytes());
@@ -1253,80 +1255,80 @@ async fn settle(
         grpc_client.confirm_registration(intent_id.clone()).await?;
     } else {
         bail!(
-            "Did not find intent ID {} in round: {}",
+            "Did not find intent ID {} in batch: {}",
             intent_id,
             batch_started_event.id
         )
     }
 
-    let round_signing_event;
+    let batch_signing_event;
     loop {
         match event_stream.next().await {
-            Some(Ok(RoundStreamEvent::TreeTx(e))) => match e.batch_tree_event_type {
+            Some(Ok(StreamEvent::TreeTx(e))) => match e.batch_tree_event_type {
                 BatchTreeEventType::Vtxo => vtxo_graph_chunks.push(e.tx_graph_chunk),
                 BatchTreeEventType::Connector => {
                     bail!("Unexpected connector batch tree event");
                 }
             },
-            Some(Ok(RoundStreamEvent::TreeSigningStarted(e))) => {
-                round_signing_event = e;
+            Some(Ok(StreamEvent::TreeSigningStarted(e))) => {
+                batch_signing_event = e;
                 break;
             }
-            other => bail!("Unexpected event while waiting for round signing: {other:?}"),
+            other => bail!("Unexpected event while waiting for batch signing: {other:?}"),
         }
     }
 
     let mut vtxo_graph = TxGraph::new(vtxo_graph_chunks)?;
 
-    let round_id = round_signing_event.id;
-    tracing::info!(round_id, "Round signing started");
+    let batch_id = batch_signing_event.id;
+    tracing::info!(batch_id, "Batch signing started");
 
     let nonce_tree = generate_nonce_tree(
         &mut rng,
         &vtxo_graph,
         cosigner_kp.public_key(),
-        &round_signing_event.unsigned_round_tx,
+        &batch_signing_event.unsigned_commitment_tx,
     )?;
 
     grpc_client
         .submit_tree_nonces(
-            &round_id,
+            &batch_id,
             cosigner_kp.public_key(),
             nonce_tree.to_nonce_pks(),
         )
         .await?;
 
-    let round_signing_nonces_generated_event = match event_stream.next().await {
-        Some(Ok(RoundStreamEvent::TreeNoncesAggregated(e))) => e,
-        other => bail!("Did not get round signing nonces generated event: {other:?}"),
+    let batch_signing_nonces_generated_event = match event_stream.next().await {
+        Some(Ok(StreamEvent::TreeNoncesAggregated(e))) => e,
+        other => bail!("Did not get batch signing nonces generated event: {other:?}"),
     };
 
-    tracing::info!(round_id, "Round combined nonces generated");
+    tracing::info!(batch_id, "Batch combined nonces generated");
 
-    let round_id = round_signing_nonces_generated_event.id;
+    let batch_id = batch_signing_nonces_generated_event.id;
 
-    let agg_pub_nonce_tree = round_signing_nonces_generated_event.tree_nonces;
+    let agg_pub_nonce_tree = batch_signing_nonces_generated_event.tree_nonces;
 
-    let partial_sig_tree = sign_vtxo_tree(
+    let partial_sig_tree = sign_batch_tree(
         server_info.vtxo_tree_expiry,
         server_info.pk.x_only_public_key().0,
         &cosigner_kp,
         &vtxo_graph,
-        &round_signing_event.unsigned_round_tx,
+        &batch_signing_event.unsigned_commitment_tx,
         nonce_tree,
         &agg_pub_nonce_tree,
     )?;
 
     grpc_client
-        .submit_tree_signatures(&round_id, cosigner_kp.public_key(), partial_sig_tree)
+        .submit_tree_signatures(&batch_id, cosigner_kp.public_key(), partial_sig_tree)
         .await?;
 
     let mut connectors_graph_chunks = Vec::new();
 
-    let round_finalization_event;
+    let batch_finalization_event;
     loop {
         match event_stream.next().await {
-            Some(Ok(RoundStreamEvent::TreeTx(e))) => match e.batch_tree_event_type {
+            Some(Ok(StreamEvent::TreeTx(e))) => match e.batch_tree_event_type {
                 BatchTreeEventType::Vtxo => {
                     bail!("Unexpected VTXO batch tree event");
                 }
@@ -1334,7 +1336,7 @@ async fn settle(
                     connectors_graph_chunks.push(e.tx_graph_chunk);
                 }
             },
-            Some(Ok(RoundStreamEvent::TreeSignature(e))) => match e.batch_tree_event_type {
+            Some(Ok(StreamEvent::TreeSignature(e))) => match e.batch_tree_event_type {
                 BatchTreeEventType::Vtxo => {
                     vtxo_graph.apply(|graph| {
                         if graph.root().unsigned_tx.compute_txid() != e.txid {
@@ -1350,17 +1352,17 @@ async fn settle(
                     bail!("received batch tree signature for connectors tree");
                 }
             },
-            Some(Ok(RoundStreamEvent::BatchFinalization(e))) => {
-                round_finalization_event = e;
+            Some(Ok(StreamEvent::BatchFinalization(e))) => {
+                batch_finalization_event = e;
                 break;
             }
-            other => bail!("Unexpected event while waiting for round finalization: {other:?}"),
+            other => bail!("Unexpected event while waiting for batch finalization: {other:?}"),
         }
     }
 
-    let round_id = round_finalization_event.id;
+    let batch_id = batch_finalization_event.id;
 
-    tracing::info!(round_id, "Round finalization started");
+    tracing::info!(batch_id, "Batch finalization started");
 
     let keypair = Keypair::from_secret_key(&secp, &sk);
 
@@ -1368,7 +1370,7 @@ async fn settle(
         .spendable
         .into_iter()
         .map(|(outpoint, vtxo)| {
-            round::VtxoInput::new(
+            batch::VtxoInput::new(
                 vtxo,
                 outpoint.amount,
                 outpoint.outpoint,
@@ -1395,14 +1397,14 @@ async fn settle(
         .spendable
         .into_iter()
         .map(|(outpoint, amount, boarding_output)| {
-            round::OnChainInput::new(boarding_output, amount, outpoint)
+            batch::OnChainInput::new(boarding_output, amount, outpoint)
         })
         .collect::<Vec<_>>();
 
-    let round_psbt = if n_round_inputs == 0 {
+    let commitment_pstb = if n_batch_inputs == 0 {
         None
     } else {
-        let mut round_psbt = round_finalization_event.commitment_tx;
+        let mut commitment_pstb = batch_finalization_event.commitment_tx;
 
         let sign_for_pk_fn = |_: &XOnlyPublicKey,
                               msg: &secp256k1::Message|
@@ -1410,37 +1412,38 @@ async fn settle(
             Ok(secp.sign_schnorr_no_aux_rand(msg, &keypair))
         };
 
-        sign_round_psbt(sign_for_pk_fn, &mut round_psbt, &onchain_inputs)?;
+        sign_commitment_psbt(sign_for_pk_fn, &mut commitment_pstb, &onchain_inputs)?;
 
-        Some(round_psbt)
+        Some(commitment_pstb)
     };
 
     grpc_client
-        .submit_signed_forfeit_txs(signed_forfeit_psbts, round_psbt)
+        .submit_signed_forfeit_txs(signed_forfeit_psbts, commitment_pstb)
         .await?;
 
-    let round_finalized_event = match event_stream.next().await {
-        Some(Ok(RoundStreamEvent::BatchFinalized(e))) => e,
-        other => bail!("Did not get round finalized event: {other:?}"),
+    let batch_finalized_event = match event_stream.next().await {
+        Some(Ok(StreamEvent::BatchFinalized(e))) => e,
+        other => bail!("Did not get batch finalized event: {other:?}"),
     };
 
-    let round_id = round_finalized_event.id;
+    let batch_id = batch_finalized_event.id;
 
-    tracing::info!(round_id, "Round finalized");
+    tracing::info!(batch_id, "Batch finalized");
 
-    Ok(Some(round_finalized_event.commitment_txid))
+    Ok(Some(batch_finalized_event.commitment_txid))
 }
 
 async fn spendable_vtxos(
     grpc_client: &ark_grpc::Client,
     vtxos: &[Vtxo],
-) -> Result<HashMap<Vtxo, Vec<VtxoOutPoint>>> {
+) -> Result<HashMap<Vtxo, Vec<VirtualTxOutPoint>>> {
     let mut spendable_vtxos = HashMap::new();
     for vtxo in vtxos.iter() {
         // The VTXOs for the given Ark address that the Ark server tells us about.
-        let vtxo_outpoints = grpc_client.list_vtxos(&vtxo.to_ark_address()).await?;
+        let request = GetVtxosRequest::new_for_addresses(&[vtxo.to_ark_address()]);
+        let vtxo_list = grpc_client.list_vtxos(request).await?;
 
-        spendable_vtxos.insert(vtxo.clone(), vtxo_outpoints.spendable().to_vec());
+        spendable_vtxos.insert(vtxo.clone(), vtxo_list.spendable().to_vec());
     }
 
     Ok(spendable_vtxos)

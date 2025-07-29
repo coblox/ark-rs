@@ -1,6 +1,7 @@
 //! Messages exchanged between the client and the Ark server.
 
 use crate::tx_graph::TxGraphChunk;
+use crate::ArkAddress;
 use crate::Error;
 use ::serde::Deserialize;
 use ::serde::Serialize;
@@ -100,20 +101,87 @@ pub struct TxTreeNode {
     pub leaf: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct Round {
-    pub id: String,
-    pub start: i64,
-    pub end: i64,
-    pub round_tx: Option<Transaction>,
-    pub vtxo_tree: Option<TxTree>,
-    pub forfeit_txs: Vec<Psbt>,
-    pub connector_tree: Option<TxTree>,
-    pub stage: i32,
+// TODO: Implement pagination.
+pub struct GetVtxosRequest {
+    reference: GetVtxosRequestReference,
+    filter: Option<GetVtxosRequestFilter>,
+}
+
+impl GetVtxosRequest {
+    pub fn new_for_addresses(addresses: &[ArkAddress]) -> Self {
+        let scripts = addresses
+            .iter()
+            .map(|a| a.to_p2tr_script_pubkey())
+            .collect();
+
+        Self {
+            reference: GetVtxosRequestReference::Scripts(scripts),
+            filter: None,
+        }
+    }
+
+    pub fn new_for_outpoints(outpoints: &[OutPoint]) -> Self {
+        Self {
+            reference: GetVtxosRequestReference::OutPoints(outpoints.to_vec()),
+            filter: None,
+        }
+    }
+
+    pub fn spendable_only(self) -> Result<Self, Error> {
+        if self.filter.is_some() {
+            return Err(Error::ad_hoc("GetVtxosRequest filter already set"));
+        }
+
+        Ok(Self {
+            filter: Some(GetVtxosRequestFilter::Spendable),
+            ..self
+        })
+    }
+
+    pub fn spent_only(self) -> Result<Self, Error> {
+        if self.filter.is_some() {
+            return Err(Error::ad_hoc("GetVtxosRequest filter already set"));
+        }
+
+        Ok(Self {
+            filter: Some(GetVtxosRequestFilter::Spent),
+            ..self
+        })
+    }
+
+    pub fn recoverable_only(self) -> Result<Self, Error> {
+        if self.filter.is_some() {
+            return Err(Error::ad_hoc("GetVtxosRequest filter already set"));
+        }
+
+        Ok(Self {
+            filter: Some(GetVtxosRequestFilter::Recoverable),
+            ..self
+        })
+    }
+
+    pub fn reference(&self) -> &GetVtxosRequestReference {
+        &self.reference
+    }
+
+    pub fn filter(&self) -> Option<&GetVtxosRequestFilter> {
+        self.filter.as_ref()
+    }
+}
+
+pub enum GetVtxosRequestReference {
+    Scripts(Vec<ScriptBuf>),
+    OutPoints(Vec<OutPoint>),
+}
+
+pub enum GetVtxosRequestFilter {
+    Spendable,
+    Spent,
+    Recoverable,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct VtxoOutPoint {
+pub struct VirtualTxOutPoint {
     pub outpoint: OutPoint,
     pub created_at: i64,
     pub expires_at: i64,
@@ -125,11 +193,20 @@ pub struct VtxoOutPoint {
     pub is_swept: bool,
     pub is_unrolled: bool,
     pub is_spent: bool,
+    /// If the VTXO is spent, this field references the _checkpoint transaction_ that actually
+    /// spends it. The corresponding Ark transaction is in the `ark_txid` field.
+    ///
+    /// If the VTXO is renewed, this field references the corresponding _forfeit transaction_.
     pub spent_by: Option<Txid>,
+    /// The list of commitment transactions that are ancestors to this VTXO.
     pub commitment_txids: Vec<Txid>,
+    /// The commitment TXID onto which this VTXO was forfeited.
+    pub settled_by: Option<Txid>,
+    /// The Ark transaction that _spends_ this VTXO (if we omit the checkpoint transaction).
+    pub ark_txid: Option<Txid>,
 }
 
-impl VtxoOutPoint {
+impl VirtualTxOutPoint {
     pub fn is_recoverable(&self) -> bool {
         self.is_swept && !self.is_spent
     }
@@ -154,20 +231,24 @@ pub struct Info {
 
 #[derive(Clone, Debug)]
 pub struct ListVtxo {
-    spent: Vec<VtxoOutPoint>,
-    spendable: Vec<VtxoOutPoint>,
+    spent: Vec<VirtualTxOutPoint>,
+    spendable: Vec<VirtualTxOutPoint>,
 }
 
 impl ListVtxo {
-    pub fn new(spent: Vec<VtxoOutPoint>, spendable: Vec<VtxoOutPoint>) -> Self {
+    pub fn new(spent: Vec<VirtualTxOutPoint>, spendable: Vec<VirtualTxOutPoint>) -> Self {
         Self { spent, spendable }
     }
 
-    pub fn spent(&self) -> &[VtxoOutPoint] {
+    pub fn all(&self) -> Vec<VirtualTxOutPoint> {
+        [self.spent(), self.spendable()].concat()
+    }
+
+    pub fn spent(&self) -> &[VirtualTxOutPoint] {
         &self.spent
     }
 
-    pub fn spent_without_recoverable(&self) -> Vec<VtxoOutPoint> {
+    pub fn spent_without_recoverable(&self) -> Vec<VirtualTxOutPoint> {
         self.spent
             .iter()
             .filter(|v| !v.is_recoverable())
@@ -175,11 +256,11 @@ impl ListVtxo {
             .collect()
     }
 
-    pub fn spendable(&self) -> &[VtxoOutPoint] {
+    pub fn spendable(&self) -> &[VirtualTxOutPoint] {
         &self.spendable
     }
 
-    pub fn spendable_with_recoverable(&self) -> Vec<VtxoOutPoint> {
+    pub fn spendable_with_recoverable(&self) -> Vec<VirtualTxOutPoint> {
         let mut spendable = self.spendable.clone();
 
         let mut recoverable_vtxos = Vec::new();
@@ -225,7 +306,7 @@ pub struct BatchFailed {
 pub struct TreeSigningStartedEvent {
     pub id: String,
     pub cosigners_pubkeys: Vec<PublicKey>,
-    pub unsigned_round_tx: Psbt,
+    pub unsigned_commitment_tx: Psbt,
 }
 
 #[derive(Debug, Clone)]
@@ -258,7 +339,7 @@ pub enum BatchTreeEventType {
 }
 
 #[derive(Debug, Clone)]
-pub enum RoundStreamEvent {
+pub enum StreamEvent {
     BatchStarted(BatchStartedEvent),
     BatchFinalization(BatchFinalizationEvent),
     BatchFinalized(BatchFinalizedEvent),
@@ -269,21 +350,21 @@ pub enum RoundStreamEvent {
     TreeSignature(TreeSignatureEvent),
 }
 
-pub enum TransactionEvent {
-    Round(CommitmentTransaction),
-    Redeem(RedeemTransaction),
+pub enum StreamTransaction {
+    Commitment(CommitmentTransaction),
+    Ark(ArkTransaction),
 }
 
-pub struct RedeemTransaction {
+pub struct ArkTransaction {
     pub txid: Txid,
-    pub spent_vtxos: Vec<VtxoOutPoint>,
-    pub spendable_vtxos: Vec<VtxoOutPoint>,
+    pub spent_vtxos: Vec<VirtualTxOutPoint>,
+    pub spendable_vtxos: Vec<VirtualTxOutPoint>,
 }
 
 pub struct CommitmentTransaction {
     pub txid: Txid,
-    pub spent_vtxos: Vec<VtxoOutPoint>,
-    pub spendable_vtxos: Vec<VtxoOutPoint>,
+    pub spent_vtxos: Vec<VirtualTxOutPoint>,
+    pub spendable_vtxos: Vec<VirtualTxOutPoint>,
 }
 
 pub struct VtxoChains {
@@ -302,12 +383,12 @@ pub enum ChainedTxType {
     Commitment,
     Tree,
     Checkpoint,
-    Virtual,
+    Ark,
     Unspecified,
 }
 
 pub struct SubmitOffchainTxResponse {
-    pub signed_virtual_tx: Psbt,
+    pub signed_ark_tx: Psbt,
     pub signed_checkpoint_txs: Vec<Psbt>,
 }
 

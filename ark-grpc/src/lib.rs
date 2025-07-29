@@ -11,9 +11,7 @@ mod generated {
 pub mod client;
 
 mod error;
-mod tree;
 mod types;
 
 pub use client::*;
 pub use error::Error;
-pub use tree::*;

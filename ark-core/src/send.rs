@@ -65,7 +65,7 @@ impl VtxoInput {
 
 #[derive(Debug, Clone)]
 pub struct OffchainTransactions {
-    pub virtual_tx: Psbt,
+    pub ark_tx: Psbt,
     pub checkpoint_txs: Vec<(Psbt, CheckpointOutput, CheckpointOutPoint)>,
 }
 
@@ -78,7 +78,7 @@ pub fn build_offchain_transactions(
 ) -> Result<OffchainTransactions, Error> {
     if vtxo_inputs.is_empty() {
         return Err(Error::transaction(
-            "cannot build redeem transaction without inputs",
+            "cannot build Ark transaction without inputs",
         ));
     }
 
@@ -141,7 +141,7 @@ pub fn build_offchain_transactions(
     // TODO: Use a different locktime if we have CLTV multisig script.
     let lock_time = LockTime::ZERO;
 
-    let unsigned_virtual_tx = Transaction {
+    let unsigned_ark_tx = Transaction {
         version: transaction::Version::non_standard(3),
         lock_time,
         input: checkpoint_txs
@@ -157,8 +157,8 @@ pub fn build_offchain_transactions(
         output: outputs,
     };
 
-    let mut unsigned_virtual_psbt =
-        Psbt::from_unsigned_tx(unsigned_virtual_tx).map_err(Error::transaction)?;
+    let mut unsigned_ark_psbt =
+        Psbt::from_unsigned_tx(unsigned_ark_tx).map_err(Error::transaction)?;
 
     for (i, (_, checkpoint_output, _)) in checkpoint_txs.iter().enumerate() {
         let mut bytes = Vec::new();
@@ -179,7 +179,7 @@ pub fn build_offchain_transactions(
 
         bytes.append(&mut script_bytes);
 
-        unsigned_virtual_psbt.inputs[i].unknown.insert(
+        unsigned_ark_psbt.inputs[i].unknown.insert(
             psbt::raw::Key {
                 type_value: u8::MAX,
                 key: VTXO_TAPROOT_KEY.to_vec(),
@@ -189,7 +189,7 @@ pub fn build_offchain_transactions(
     }
 
     Ok(OffchainTransactions {
-        virtual_tx: unsigned_virtual_psbt,
+        ark_tx: unsigned_ark_psbt,
         checkpoint_txs,
     })
 }
@@ -421,7 +421,7 @@ where
     Ok(())
 }
 
-pub fn sign_offchain_virtual_transaction<S>(
+pub fn sign_ark_transaction<S>(
     sign_fn: S,
     psbt: &mut Psbt,
     checkpoint_inputs: &[(CheckpointOutput, CheckpointOutPoint)],
@@ -437,7 +437,7 @@ where
     tracing::debug!(
         ?outpoint,
         %amount,
-        "Attempting to sign selected checkpoint output for offchain virtual transaction"
+        "Attempting to sign selected checkpoint output for Ark transaction"
     );
 
     let prevout = TxOut {
@@ -455,7 +455,7 @@ where
     tracing::debug!(
         ?outpoint,
         index = input_index,
-        "Signing checkpoint output for offchain virtual transaction"
+        "Signing checkpoint output for Ark transaction"
     );
 
     let psbt_input = psbt.inputs.get_mut(input_index).expect("input at index");

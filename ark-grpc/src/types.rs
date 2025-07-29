@@ -112,7 +112,7 @@ impl TryFrom<generated::ark::v1::GetInfoResponse> for server::Info {
     }
 }
 
-impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VtxoOutPoint {
+impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VirtualTxOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::IndexerVtxo) -> Result<Self, Self::Error> {
@@ -135,6 +135,16 @@ impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VtxoOutPoint {
             .map(|c| c.parse().map_err(Error::conversion))
             .collect::<Result<Vec<_>, Error>>()?;
 
+        let settled_by = match value.settled_by.is_empty() {
+            true => None,
+            false => Some(value.settled_by.parse().map_err(Error::conversion)?),
+        };
+
+        let ark_txid = match value.ark_txid.is_empty() {
+            true => None,
+            false => Some(value.ark_txid.parse().map_err(Error::conversion)?),
+        };
+
         Ok(Self {
             outpoint,
             created_at: value.created_at,
@@ -147,11 +157,13 @@ impl TryFrom<&generated::ark::v1::IndexerVtxo> for server::VtxoOutPoint {
             is_spent: value.is_spent,
             spent_by,
             commitment_txids,
+            settled_by,
+            ark_txid,
         })
     }
 }
 
-impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
+impl TryFrom<&generated::ark::v1::Vtxo> for server::VirtualTxOutPoint {
     type Error = Error;
 
     fn try_from(value: &generated::ark::v1::Vtxo) -> Result<Self, Self::Error> {
@@ -174,6 +186,16 @@ impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
             .map(|c| c.parse().map_err(Error::conversion))
             .collect::<Result<Vec<_>, Error>>()?;
 
+        let settled_by = match value.settled_by.is_empty() {
+            true => None,
+            false => Some(value.settled_by.parse().map_err(Error::conversion)?),
+        };
+
+        let ark_txid = match value.ark_txid.is_empty() {
+            true => None,
+            false => Some(value.ark_txid.parse().map_err(Error::conversion)?),
+        };
+
         Ok(Self {
             outpoint,
             created_at: value.created_at,
@@ -186,6 +208,8 @@ impl TryFrom<&generated::ark::v1::Vtxo> for server::VtxoOutPoint {
             is_spent: value.is_spent,
             spent_by,
             commitment_txids,
+            settled_by,
+            ark_txid,
         })
     }
 }

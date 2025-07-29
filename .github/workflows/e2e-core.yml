@@ -11,13 +11,12 @@ on:
 env:
   CARGO_INCREMENTAL: 0
   CARGO_TERM_COLOR: always
-  ARK_GO_DIR: ./ark-go
-  ARKD_DIR: ./ark-go/ark/server
-  ARKD_WALLET_DIR: ./ark-go/ark/pkg/ark-wallet
-  ARK_LIVE_STORE_TYPE: inmemory
-  ARK_DB_TYPE: sqlite
-  ARK_EVENT_DB_TYPE: badger
-  ARK_VTXO_MIN_AMOUNT: 1
+  ARK_GO_DIR: ./ark-go/
+  ARKD_DIR: ./ark-go/arkd/
+  ARKD_LIVE_STORE_TYPE: inmemory
+  ARKD_DB_TYPE: sqlite
+  ARKD_EVENT_DB_TYPE: badger
+  ARKD_VTXO_MIN_AMOUNT: 1
 
 jobs:
   build-tests:
@@ -102,11 +101,6 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '>=1.23.1'
-
-      - name: Run go work sync for arkd
-        run: |
-          cd $ARKD_DIR
-          go work sync
 
       - name: Start redis
         run: |
