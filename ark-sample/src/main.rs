@@ -99,6 +99,11 @@ enum Commands {
     },
     /// Transform boarding outputs and VTXOs into fresh, confirmed VTXOs.
     Settle,
+    /// Subscribe to notifications for an Ark address.
+    Subscribe {
+        /// The Ark address to subscribe to.
+        address: ArkAddressCli,
+    },
 }
 
 #[derive(Clone)]
@@ -517,6 +522,52 @@ async fn main() -> Result<()> {
                 .map(|(address, _)| address.encode())
                 .collect::<Vec<_>>();
             println!("Sent {total_amount} to {all_addresses:?} in transaction {ark_txid}",);
+        }
+        Commands::Subscribe { address } => {
+            println!("Subscribing to address: {}", address.0);
+
+            // First subscribe to the address to get a subscription ID
+            let subscription_id = grpc_client
+                .subscribe_to_scripts(vec![address.0.clone()], "".to_string())
+                .await?;
+
+            println!("Subscription ID: {}", subscription_id);
+
+            // Now get the subscription stream
+            let mut subscription_stream = grpc_client.get_subscription(subscription_id).await?;
+
+            // FIXME: I never get called!!
+
+            println!("Listening for notifications... Press Ctrl+C to stop");
+
+            // Process subscription responses as they come in
+            while let Some(result) = subscription_stream.next().await {
+                match result {
+                    Ok(response) => {
+                        println!("Received subscription response:");
+                        println!("  TXID: {}", response.txid);
+                        println!("  Scripts: {:?}", response.scripts);
+                        println!("  New VTXOs: {} vtxos", response.new_vtxos.len());
+                        println!("  Spent VTXOs: {} vtxos", response.spent_vtxos.len());
+
+                        if let Some(tx) = &response.tx {
+                            println!("  Transaction: {}", tx.unsigned_tx.compute_txid());
+                        }
+
+                        if !response.checkpoint_txs.is_empty() {
+                            println!("  Checkpoint transactions: {:?}", response.checkpoint_txs);
+                        }
+
+                        println!("---");
+                    }
+                    Err(e) => {
+                        println!("Error receiving subscription response: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            println!("Subscription stream ended");
         }
     }
 
